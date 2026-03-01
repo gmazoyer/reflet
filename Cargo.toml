@@ -2,6 +2,7 @@
 members = [
     "crates/reflet-core",
     "crates/reflet-bgp",
+    "crates/reflet-api",
 ]
 resolver = "2"
 
@@ -14,6 +15,7 @@ license = "Apache-2.0"
 # Internal crates
 reflet-core = { path = "crates/reflet-core" }
 reflet-bgp = { path = "crates/reflet-bgp" }
+reflet-api = { path = "crates/reflet-api" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
