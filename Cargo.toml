@@ -3,6 +3,7 @@ members = [
     "crates/reflet-core",
     "crates/reflet-bgp",
     "crates/reflet-api",
+    "crates/reflet",
 ]
 resolver = "2"
 

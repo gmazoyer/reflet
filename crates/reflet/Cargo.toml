@@ -1,0 +1,19 @@
+[package]
+name = "reflet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+reflet-core = { workspace = true }
+reflet-bgp = { workspace = true }
+reflet-api = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
