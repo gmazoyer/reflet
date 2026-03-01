@@ -1,8 +1,10 @@
 pub mod asn;
 pub mod community;
 pub mod config;
+pub mod event_log;
 pub mod peer;
 pub mod prefix;
 pub mod rib;
+pub mod rib_persistence;
 pub mod route;
 pub mod rpki;
