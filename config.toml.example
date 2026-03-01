@@ -1,0 +1,74 @@
+# Community annotation (optional)
+# Path to a directory of community definition files (e.g. NLNOG format)
+# communities_dir = "/path/to/communities"
+
+# ASN information (optional)
+# Path to ipinfo ASN database (CSV or CSV.GZ)
+# ipinfo_dataset_file = "/path/to/ipinfo_lite.csv.gz"
+
+[server]
+listen = "0.0.0.0:8080"       # REST API listen address
+bgp_listen = "0.0.0.0:179"    # BGP listen address
+# title = "Reflet"            # display title shown in the web UI header (default: "Reflet")
+# hide_peer_addresses = true   # hide peer IPs, router IDs, and next-hops from API responses
+
+[bgp]
+local_asn = 65000
+router_id = "10.0.0.1"
+hold_time = 90                  # seconds
+
+# Graceful Restart (RFC 4724)
+# When enabled, RIBs are persisted on shutdown and reloaded on startup
+# so the looking glass retains routes across restarts.
+# [bgp.graceful_restart]
+# enabled = true
+# restart_time = 120              # seconds (max 4095)
+# data_dir = "/var/lib/reflet/rib"
+
+# iBGP is recommended for a looking glass: using the same ASN as your
+# network preserves the original next-hop attributes and, when combined
+# with a route-reflector or add-path, exposes all available paths to each
+# prefix — not just the best one. The looking glass does not forward
+# traffic, so standard iBGP loop-prevention concerns do not apply.
+
+[[peers]]
+address = "10.0.0.2"
+remote_asn = 65000              # same as local_asn → iBGP
+name = "Router A"               # short label shown in UI, metrics, and lookup results
+description = "Primary border router in Amsterdam DC1"  # longer text shown in peer list
+location = "DC1, Amsterdam"     # optional: city, datacenter, etc.
+families = ["ipv4-unicast", "ipv6-unicast"]
+
+[[peers]]
+address = "10.0.0.3"
+remote_asn = 65000              # same as local_asn → iBGP
+name = "Router B"
+description = "Secondary border router in Frankfurt DC2"
+location = "DC2, Frankfurt"     # optional: city, datacenter, etc.
+families = ["ipv4-unicast", "ipv6-unicast"]
+
+# IPv4-only peer — only negotiates and stores IPv4 unicast routes
+# [[peers]]
+# address = "10.0.0.4"
+# remote_asn = 65000
+# name = "Router C"
+# description = "IPv4-only router in Paris"
+# families = ["ipv4-unicast"]
+
+# RPKI validation (optional)
+# Fetch Validated ROA Payloads from a Routinator-compatible RPKI validator
+# and annotate routes with their RPKI status (valid/invalid/not-found).
+# [rpki]
+# enabled = true
+# url = "https://rpki.example.com"    # Routinator base URL (fetches /json)
+# refresh_interval = 300               # seconds between VRP refreshes
+
+# Event log: record route announcements, withdrawals, and session changes
+# [event_log]
+# enabled = true
+# buffer_size = 10000              # number of recent events kept in memory
+# file = "/var/log/reflet/events.jsonl"  # optional: persist events to disk as JSONL
+
+[logging]
+level = "info"                  # tracing level filter
+format = "pretty"               # "json" or "pretty"
