@@ -1,0 +1,43 @@
+{
+  "name": "reflet-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5",
+    "@tanstack/react-table": "^8",
+    "@tanstack/react-virtual": "^3",
+    "axios": "^1",
+    "react": "^19",
+    "react-dom": "^19",
+    "react-router-dom": "^7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "@tailwindcss/vite": "^4",
+    "@testing-library/jest-dom": "^6",
+    "@testing-library/react": "^16",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
+    "autoprefixer": "^10",
+    "eslint": "^9",
+    "eslint-plugin-react-hooks": "^5",
+    "eslint-plugin-react-refresh": "^0.5",
+    "globals": "^17",
+    "jsdom": "^28",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "typescript-eslint": "^8",
+    "vite": "^7",
+    "vitest": "^4"
+  }
+}
