@@ -1,5 +1,7 @@
 [workspace]
-members = []
+members = [
+    "crates/reflet-core",
+]
 resolver = "2"
 
 [workspace.package]
@@ -8,6 +10,9 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+# Internal crates
+reflet-core = { path = "crates/reflet-core" }
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
