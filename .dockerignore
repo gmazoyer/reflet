@@ -1,0 +1,24 @@
+# Build artifacts
+target/
+frontend/dist/
+frontend/node_modules/
+
+# Version control
+.git/
+.gitignore
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation & CI (not needed in image)
+docs/
+.github/
+
+# Docker files (avoid recursive context)
+docker-compose.yml
+
+# Config (mounted at runtime, not baked in)
+config.toml

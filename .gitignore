@@ -1,0 +1,23 @@
+# Rust
+/target/
+
+# Frontend
+/frontend/node_modules/
+/frontend/dist/
+*.tsbuildinfo
+
+# Configuration (may contain secrets)
+config.toml
+
+# Datasets
+*.csv
+*.csv.gz
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
