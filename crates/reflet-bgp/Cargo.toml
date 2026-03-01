@@ -1,0 +1,18 @@
+[package]
+name = "reflet-bgp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+reflet-core = { workspace = true }
+tokio = { workspace = true }
+zettabgp = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+ipnet = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
