@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./config.toml:/etc/reflet/config.toml:ro
+    ports:
+      - "8080:8080"
+      - "179:179"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      - BACKEND_URL=http://backend:8080
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
