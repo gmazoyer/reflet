@@ -4,55 +4,34 @@ A BGP Looking Glass built with Rust and React. Reflet connects to your BGP route
 
 *Reflet* is French for "reflection" — the tool reflects your network's routing state for observation.
 
-## Features
+## What it does
 
-- **Full BGP support**: RFC 4271 state machine, Add-Path (RFC 7911), Route Refresh (RFC 2918 + RFC 7313), Graceful Restart (RFC 4724)
-- **RPKI validation**: Per-route ROA validity (valid/invalid/not-found) via Routinator or any compatible RPKI validator
-- **Rich route filtering**: Search by prefix, ASN, AS path, community (standard/large/extended, with wildcards), origin, MED, and local-pref with comparison operators
-- **Prefix lookup**: Exact match, longest-prefix-match, and subnet (more-specific) lookups across all peers
-- **AS path graph**: Interactive DAG visualization of AS paths from lookup results
-- **Real-time updates**: Server-Sent Events push route changes to the browser instantly
-- **Prometheus metrics**: Monitor peer status, prefix counts, and session uptime
-- **Community annotations**: Human-readable community names from definition files
-- **ASN enrichment**: AS names and countries from [IPInfo Lite](https://ipinfo.io/lite) datasets
-- **RFC 8522 API**: Standard looking glass REST interface
-- **OpenAPI docs**: Swagger UI at `/docs`
+Reflet speaks BGP natively. It peers with your routers using a full RFC 4271 state machine with support for Add-Path (RFC 7911), Route Refresh (RFC 2918 + RFC 7313), and Graceful Restart (RFC 4724), then stores every route it receives in memory for fast lookups.
+
+Routes can be searched by prefix (exact, longest-prefix-match, or more-specifics across all peers), filtered by ASN, AS path regex, community values with wildcards, origin, MED, or local-pref with comparison operators. Lookup results include an interactive AS path DAG visualization. If you run an RPKI validator like Routinator, Reflet annotates every route with its ROA validation status (valid, invalid, or not-found).
+
+The web frontend streams route changes in real time over Server-Sent Events, so the view stays current without polling. Communities are shown with human-readable names if you provide definition files, and AS numbers are enriched with names and countries from [IPInfo Lite](https://ipinfo.io/lite) datasets.
+
+For automation, the backend exposes a REST API following the RFC 8522 Looking Glass standard, with interactive Swagger UI at `/docs` and Prometheus metrics at `/metrics`.
 
 ## Quick Start
 
-### Prerequisites
-
-- [Rust](https://rustup.rs) (stable)
-- [Node.js](https://nodejs.org) 18+ and npm
-
-### Build
+You'll need [Rust](https://rustup.rs) (stable) and [Node.js](https://nodejs.org) 18+ with npm.
 
 ```bash
-# Backend
+# Build
 cargo build
+cd frontend && npm install && npm run build && cd ..
 
-# Frontend
-cd frontend && npm install && npm run build
-```
-
-### Configure
-
-```bash
+# Configure
 cp config.toml.example config.toml
 # Edit config.toml with your BGP local ASN, router ID, and peers
-```
 
-### Run
-
-```bash
-# Start the backend
+# Run
 cargo run --bin reflet -- --config config.toml
-
-# Start the frontend dev server (in another terminal)
-cd frontend && npm run dev
 ```
 
-Open http://localhost:5173.
+For development, start the frontend dev server in a second terminal with `cd frontend && npm run dev`, then open http://localhost:5173.
 
 ### Docker
 
@@ -60,9 +39,38 @@ Open http://localhost:5173.
 docker compose up -d
 ```
 
-Frontend on port 80, backend API on port 8080. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for production deployment options.
+Frontend on port 80, backend API on port 8080. See [docs/deployment.md](docs/deployment.md) for production deployment options.
 
-## CLI Usage
+## Configuration
+
+Reflet is configured through a single TOML file. Copy [config.toml.example](config.toml.example) as a starting point. Here's a minimal configuration:
+
+```toml
+[server]
+listen = "0.0.0.0:8080"
+bgp_listen = "0.0.0.0:179"
+
+[bgp]
+local_asn = 65000
+router_id = "10.0.0.1"
+hold_time = 90
+
+[[peers]]
+address = "10.0.0.2"
+remote_asn = 65000
+name = "Router A"
+description = "Primary border router in Amsterdam DC1"
+location = "DC1, Amsterdam"
+families = ["ipv4-unicast", "ipv6-unicast"]
+
+[logging]
+level = "info"
+format = "pretty"
+```
+
+Optional sections include `[bgp.graceful_restart]` for RIB persistence across restarts, `[rpki]` for RPKI validation via a Routinator endpoint, and `[event_log]` for persisting route change events to disk. Community definition files and IPInfo ASN datasets can be loaded from paths set at the top level. See the example config for the full reference. For a complete reference of every option, see [docs/configuration.md](docs/configuration.md).
+
+## CLI
 
 ```
 reflet [OPTIONS]
@@ -75,102 +83,26 @@ reflet [OPTIONS]
 | `--version`           | Print version and exit                               |
 | `-h, --help`          | Print help                                           |
 
-```bash
-# Validate your config without starting the server
-reflet --check --config config.toml
-
-# Print version
-reflet --version
-```
-
-## Configuration
-
-```toml
-# Optional: human-readable community names from definition files.
-# A good starting point is the NLNOG community definitions:
-# https://github.com/NLNOG/lg.ring.nlnog.net/tree/main/communities
-# communities_dir = "/path/to/communities"
-
-# Optional: ASN names and countries from the IPInfo free Lite database.
-# Download the ASN CSV from: https://ipinfo.io/products/free-ip-database
-# Supports both plain CSV and gzip-compressed CSV (.csv.gz).
-# ipinfo_dataset_file = "/path/to/ipinfo_lite.csv.gz"
-
-[server]
-listen = "0.0.0.0:8080"
-bgp_listen = "0.0.0.0:179"
-# title = "Reflet"
-# hide_peer_addresses = true
-
-[bgp]
-local_asn = 65000
-router_id = "10.0.0.1"
-hold_time = 90
-
-# [bgp.graceful_restart]
-# enabled = true
-# restart_time = 120
-# data_dir = "/var/lib/reflet/rib"
-
-[[peers]]
-address = "10.0.0.2"
-remote_asn = 65000
-name = "Router A"
-description = "Primary border router in Amsterdam DC1"
-location = "DC1, Amsterdam"
-families = ["ipv4-unicast", "ipv6-unicast"]
-
-# [rpki]
-# enabled = true
-# url = "https://rpki.example.com"
-# refresh_interval = 300
-
-# [event_log]
-# enabled = true
-# buffer_size = 10000
-# file = "/var/log/reflet/events.jsonl"
-
-[logging]
-level = "info"
-format = "pretty"
-```
-
-See [config.toml.example](config.toml.example) for the full reference.
-
 ## API
 
-| Method | Endpoint                             | Description                                     |
-|--------|--------------------------------------|-------------------------------------------------|
-| GET    | `/api/v1/summary`                    | Instance summary (ASN, router ID, peer/prefix counts) |
-| GET    | `/api/v1/peers`                      | List all peers                                  |
-| GET    | `/api/v1/peers/{id}`                 | Peer details                                    |
-| POST   | `/api/v1/peers/{id}/refresh`         | Request route refresh                           |
-| GET    | `/api/v1/peers/{id}/routes/ipv4`     | IPv4 routes (paginated, filterable)             |
-| GET    | `/api/v1/peers/{id}/routes/ipv6`     | IPv6 routes (paginated, filterable)             |
-| GET    | `/api/v1/lookup?prefix=...&type=...` | Prefix lookup (exact, longest-match, subnets)   |
-| GET    | `/api/v1/events`                     | Recent route change events                      |
-| GET    | `/api/v1/events/stream`              | SSE stream for real-time updates                |
-| GET    | `/metrics`                           | Prometheus metrics                              |
-| GET    | `/docs`                              | Swagger UI                                      |
+The REST API lives under `/api/v1/`. Peers and their routes are accessed through `/api/v1/peers/{id}/routes/ipv4` and `.../ipv6`, with pagination and filtering support. Cross-peer prefix lookups (exact, longest-match, or more-specifics) are available at `/api/v1/lookup`. A summary of the instance, including ASN, router ID, and prefix counts, is served from `/api/v1/summary`.
 
-RFC 8522 endpoints are available under `/.well-known/looking-glass/v1/`.
+Real-time route changes are streamed over SSE at `/api/v1/events/stream`, with a recent event buffer at `/api/v1/events`. RFC 8522 endpoints are available under `/.well-known/looking-glass/v1/`.
+
+Interactive API documentation is served at `/docs` and Prometheus metrics at `/metrics`.
 
 ## Testing
 
 ```bash
-# All backend tests
-cargo test --workspace
-
-# Clippy (zero warnings required)
-cargo clippy --workspace
-
-# Frontend
-cd frontend && npm test && npm run lint
+cargo test --workspace          # All backend tests
+cargo clippy --workspace        # Lint (zero warnings required)
+cd frontend && npm test         # Frontend tests
 ```
 
 ## Documentation
 
-- [Deployment](docs/DEPLOYMENT.md) - Docker setup, monitoring, SSE proxy config, graceful shutdown
+- [Configuration](docs/configuration.md) — full reference for every config option
+- [Deployment](docs/deployment.md) — Docker setup, monitoring, SSE proxy configuration, and graceful shutdown
 
 ## License
 
