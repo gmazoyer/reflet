@@ -1,8 +1,6 @@
 services:
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/gmazoyer/reflet:latest
     volumes:
       - ./config.toml:/etc/reflet/config.toml:ro
     ports:
@@ -11,9 +9,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/gmazoyer/reflet-frontend:latest
     environment:
       - BACKEND_URL=http://backend:8080
     ports:
