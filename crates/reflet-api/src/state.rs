@@ -25,6 +25,7 @@ pub struct AppState {
     pub asn_store: Arc<RwLock<AsnStore>>,
     pub title: Arc<RwLock<String>>,
     pub hide_peer_addresses: Arc<RwLock<bool>>,
+    pub disable_route_refresh: Arc<RwLock<bool>>,
     pub command_channels:
         Arc<RwLock<HashMap<String, mpsc::Sender<reflet_bgp::refresh::SessionCommand>>>>,
     pub event_log: EventLog,
@@ -43,6 +44,7 @@ impl AppState {
         asn_store: Arc<RwLock<AsnStore>>,
         title: Arc<RwLock<String>>,
         hide_peer_addresses: Arc<RwLock<bool>>,
+        disable_route_refresh: Arc<RwLock<bool>>,
         command_channels: Arc<
             RwLock<HashMap<String, mpsc::Sender<reflet_bgp::refresh::SessionCommand>>>,
         >,
@@ -58,6 +60,7 @@ impl AppState {
             asn_store,
             title,
             hide_peer_addresses,
+            disable_route_refresh,
             command_channels,
             event_log,
             event_notify,
@@ -118,6 +121,9 @@ impl AppState {
 
     /// Request a route refresh for a specific peer.
     pub fn request_route_refresh(&self, peer_id: &str) -> Result<(), ApiError> {
+        if *self.disable_route_refresh.read().unwrap() {
+            return Err(ApiError::Forbidden("route refresh is disabled".to_string()));
+        }
         let channels = self.command_channels.read().unwrap();
         let tx = channels
             .get(peer_id)

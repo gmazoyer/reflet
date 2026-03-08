@@ -15,6 +15,7 @@ pub struct SummaryResponse {
     pub established_peers: usize,
     pub total_ipv4_prefixes: usize,
     pub total_ipv6_prefixes: usize,
+    pub route_refresh_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpki: Option<RpkiSummary>,
 }
@@ -47,6 +48,8 @@ pub async fn get_summary(State(state): State<AppState>) -> Json<SummaryResponse>
         }
     };
 
+    let route_refresh_enabled = !*state.disable_route_refresh.read().unwrap();
+
     Json(SummaryResponse {
         title: state.title.read().unwrap().clone(),
         local_asn: state.bgp_config.local_asn,
@@ -55,6 +58,7 @@ pub async fn get_summary(State(state): State<AppState>) -> Json<SummaryResponse>
         established_peers: established,
         total_ipv4_prefixes: total_v4,
         total_ipv6_prefixes: total_v6,
+        route_refresh_enabled,
         rpki,
     })
 }

@@ -116,9 +116,8 @@ impl CommunityStore {
                 let meta = std::fs::symlink_metadata(entry.path())?;
                 if meta.is_symlink() {
                     // Extract ASN from filename: as133086.txt -> 133086
-                    if let Some(asn_str) = name
-                        .strip_prefix("as")
-                        .and_then(|s| s.strip_suffix(".txt"))
+                    if let Some(asn_str) =
+                        name.strip_prefix("as").and_then(|s| s.strip_suffix(".txt"))
                         && let Ok(asn) = asn_str.parse::<u32>()
                     {
                         // Read through the symlink (std::fs::read_to_string follows symlinks)
@@ -508,14 +507,26 @@ mod tests {
         .unwrap();
         let store = CommunityStore::load(dir.path()).unwrap();
         // Should NOT be in exact maps
-        assert!(store.definitions().standard.get("15169:13001-13099").is_none());
+        assert!(
+            store
+                .definitions()
+                .standard
+                .get("15169:13001-13099")
+                .is_none()
+        );
         // Should be in ranges
         assert_eq!(store.definitions().ranges.len(), 1);
         let r = &store.definitions().ranges[0];
         assert_eq!(r.description, "Some range description");
         assert_eq!(r.segments.len(), 2);
         assert!(matches!(&r.segments[0], SegmentMatcher::Exact { value } if value == "15169"));
-        assert!(matches!(&r.segments[1], SegmentMatcher::Range { start: 13001, end: 13099 }));
+        assert!(matches!(
+            &r.segments[1],
+            SegmentMatcher::Range {
+                start: 13001,
+                end: 13099
+            }
+        ));
     }
 
     #[test]
@@ -529,7 +540,13 @@ mod tests {
         let store = CommunityStore::load(dir.path()).unwrap();
         assert_eq!(store.definitions().ranges.len(), 1);
         let r = &store.definitions().ranges[0];
-        assert!(matches!(&r.segments[0], SegmentMatcher::Range { start: 65001, end: 65004 }));
+        assert!(matches!(
+            &r.segments[0],
+            SegmentMatcher::Range {
+                start: 65001,
+                end: 65004
+            }
+        ));
         assert!(matches!(&r.segments[1], SegmentMatcher::Exact { value } if value == "6509"));
     }
 
@@ -546,7 +563,13 @@ mod tests {
         assert_eq!(store.definitions().ranges.len(), 1);
         assert!(store.definitions().patterns.is_empty());
         let r = &store.definitions().ranges[0];
-        assert!(matches!(&r.segments[0], SegmentMatcher::Range { start: 65511, end: 65513 }));
+        assert!(matches!(
+            &r.segments[0],
+            SegmentMatcher::Range {
+                start: 65511,
+                end: 65513
+            }
+        ));
         assert!(matches!(&r.segments[1], SegmentMatcher::Wildcard { pattern } if pattern == "nnn"));
     }
 

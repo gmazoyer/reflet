@@ -103,6 +103,10 @@ pub struct ServerConfig {
     /// from API responses. Useful when exposing the looking glass publicly.
     #[serde(default)]
     pub hide_peer_addresses: bool,
+    /// When true, the route refresh API is disabled and the UI button is hidden.
+    /// Useful for public instances to prevent abuse.
+    #[serde(default)]
+    pub disable_route_refresh: bool,
 }
 
 /// BGP speaker configuration.
@@ -219,6 +223,7 @@ impl Default for ServerConfig {
             bgp_listen: default_bgp_listen(),
             title: default_title(),
             hide_peer_addresses: false,
+            disable_route_refresh: false,
         }
     }
 }
@@ -525,6 +530,22 @@ enabled = true
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("rpki.url"));
+    }
+
+    #[test]
+    fn parse_disable_route_refresh() {
+        let toml = r#"
+[server]
+disable_route_refresh = true
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert!(config.server.disable_route_refresh);
+    }
+
+    #[test]
+    fn disable_route_refresh_defaults_to_false() {
+        let config = Config::from_toml("").unwrap();
+        assert!(!config.server.disable_route_refresh);
     }
 
     #[test]

@@ -87,6 +87,7 @@ export interface SummaryResponse {
   established_peers: number;
   total_ipv4_prefixes: number;
   total_ipv6_prefixes: number;
+  route_refresh_enabled: boolean;
   rpki?: RpkiSummary | null;
 }
 

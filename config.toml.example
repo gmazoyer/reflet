@@ -7,10 +7,11 @@
 # ipinfo_dataset_file = "/path/to/ipinfo_lite.csv.gz"
 
 [server]
-listen = "0.0.0.0:8080"       # REST API listen address
-bgp_listen = "0.0.0.0:179"    # BGP listen address
-# title = "Reflet"            # display title shown in the web UI header (default: "Reflet")
+listen = "0.0.0.0:8080"        # REST API listen address
+bgp_listen = "0.0.0.0:179"     # BGP listen address
+# title = "Reflet"             # display title shown in the web UI header (default: "Reflet")
 # hide_peer_addresses = true   # hide peer IPs, router IDs, and next-hops from API responses
+# disable_route_refresh = true # disable the route refresh button/API (for public instances)
 
 [bgp]
 local_asn = 65000

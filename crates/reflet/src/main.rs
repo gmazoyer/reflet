@@ -185,6 +185,7 @@ async fn main() -> Result<()> {
     let asn_store = Arc::new(RwLock::new(asn_store));
     let title = Arc::new(RwLock::new(config.server.title.clone()));
     let hide_peer_addresses = Arc::new(RwLock::new(config.server.hide_peer_addresses));
+    let disable_route_refresh = Arc::new(RwLock::new(config.server.disable_route_refresh));
 
     // Create API state
     let state = AppState::new(
@@ -195,6 +196,7 @@ async fn main() -> Result<()> {
         asn_store.clone(),
         title.clone(),
         hide_peer_addresses.clone(),
+        disable_route_refresh.clone(),
         speaker.command_channels(),
         event_log.clone(),
         event_notify,
@@ -207,6 +209,7 @@ async fn main() -> Result<()> {
         let reload_config_path = cli.config.clone();
         let reload_title = title;
         let reload_hide = hide_peer_addresses;
+        let reload_disable_route_refresh = disable_route_refresh;
         let reload_communities = community_store;
         let reload_asns = asn_store;
         let reload_rpki = rpki_store;
@@ -220,6 +223,7 @@ async fn main() -> Result<()> {
                     &reload_config_path,
                     &reload_title,
                     &reload_hide,
+                    &reload_disable_route_refresh,
                     &reload_communities,
                     &reload_asns,
                     &reload_rpki,
@@ -331,6 +335,7 @@ fn reload_config(
     config_path: &str,
     title: &Arc<RwLock<String>>,
     hide_peer_addresses: &Arc<RwLock<bool>>,
+    disable_route_refresh: &Arc<RwLock<bool>>,
     community_store: &Arc<RwLock<CommunityStore>>,
     asn_store: &Arc<RwLock<AsnStore>>,
     _rpki_store: &Arc<RwLock<RpkiStore>>,
@@ -346,6 +351,7 @@ fn reload_config(
     // Update server presentation settings
     *title.write().unwrap() = config.server.title.clone();
     *hide_peer_addresses.write().unwrap() = config.server.hide_peer_addresses;
+    *disable_route_refresh.write().unwrap() = config.server.disable_route_refresh;
 
     // Reload community definitions
     let new_communities = match &config.communities_dir {

@@ -57,6 +57,7 @@ pub async fn get_peer(
     ),
     responses(
         (status = 200, description = "Route refresh requested", body = RouteRefreshResponse),
+        (status = 403, description = "Route refresh is disabled"),
         (status = 404, description = "Peer not found or no active session"),
     ),
     tag = "peers"

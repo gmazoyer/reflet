@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
-import { usePeer, usePeerRoutes, useAsnInfo, useCommunityDefinitions, useRefreshPeer } from "../hooks/useApi";
+import { usePeer, usePeerRoutes, useAsnInfo, useCommunityDefinitions, useRefreshPeer, useSummary } from "../hooks/useApi";
 import { isHiddenAddress } from "../utils/hiddenAddress";
 import ClearButton from "../components/ClearButton";
 import Pagination from "../components/Pagination";
@@ -20,6 +20,7 @@ export default function PeerRoutes() {
 
   const { data: asnInfo } = useAsnInfo();
   const { data: communityDefs } = useCommunityDefinitions();
+  const { data: summary } = useSummary();
   const { data: peer, isLoading: peerLoading } = usePeer(id!);
   const refreshMutation = useRefreshPeer();
   const { data: routes, isLoading: routesLoading } = usePeerRoutes(
@@ -97,31 +98,33 @@ export default function PeerRoutes() {
               <span className="text-gray-500 dark:text-gray-400">Location:</span> {peer.location}
             </div>
           )}
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              onClick={handleRefresh}
-              disabled={refreshMutation.isPending || peer.state !== "Established"}
-              className="px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title={peer.state !== "Established" ? "Peer must be established to refresh" : "Request route refresh from peer"}
-            >
-              {refreshMutation.isPending ? (
-                <span className="flex items-center gap-1.5">
-                  <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Refreshing...
+          {summary?.route_refresh_enabled !== false && (
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={handleRefresh}
+                disabled={refreshMutation.isPending || peer.state !== "Established"}
+                className="px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title={peer.state !== "Established" ? "Peer must be established to refresh" : "Request route refresh from peer"}
+              >
+                {refreshMutation.isPending ? (
+                  <span className="flex items-center gap-1.5">
+                    <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Refreshing...
+                  </span>
+                ) : (
+                  "Refresh Routes"
+                )}
+              </button>
+              {refreshMessage && (
+                <span className={`text-xs ${refreshMessage.type === "success" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+                  {refreshMessage.text}
                 </span>
-              ) : (
-                "Refresh Routes"
               )}
-            </button>
-            {refreshMessage && (
-              <span className={`text-xs ${refreshMessage.type === "success" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
-                {refreshMessage.text}
-              </span>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 

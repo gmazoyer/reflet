@@ -26,6 +26,7 @@ Controls the HTTP API and BGP listening sockets, the web UI title, and privacy s
 | `bgp_listen` | socket address | `0.0.0.0:179` | Address and port for incoming BGP connections. Port 179 requires root or `CAP_NET_BIND_SERVICE`. |
 | `title` | string | `"Reflet"` | Display title shown in the web UI header. |
 | `hide_peer_addresses` | boolean | `false` | When `true`, peer IP addresses, router IDs, and next-hop addresses are hidden from API responses. |
+| `disable_route_refresh` | boolean | `false` | When `true`, the route refresh API returns 403 and the UI button is hidden. Useful for public instances to prevent abuse. |
 
 ```toml
 [server]
@@ -33,6 +34,7 @@ listen = "0.0.0.0:8080"
 bgp_listen = "0.0.0.0:179"
 title = "Reflet"
 hide_peer_addresses = false
+disable_route_refresh = false
 ```
 
 ## `[bgp]`

@@ -80,6 +80,7 @@ fn test_state() -> AppState {
         Arc::new(RwLock::new(AsnStore::empty())),
         Arc::new(RwLock::new("Reflet".into())),
         Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(false)),
         Arc::new(RwLock::new(HashMap::new())),
         EventLog::disabled(),
         test_notify(),
@@ -233,7 +234,11 @@ async fn get_peer_ipv6_routes() {
 #[tokio::test]
 async fn get_peer_routes_pagination() {
     let app = build_router(test_state());
-    let (status, body) = get(app, "/api/v1/peers/Router%20A/routes/ipv4?page=1&per_page=1").await;
+    let (status, body) = get(
+        app,
+        "/api/v1/peers/Router%20A/routes/ipv4?page=1&per_page=1",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     let routes = json["data"].as_array().unwrap();
@@ -502,6 +507,7 @@ async fn lookup_exact_returns_multiple_paths() {
         Arc::new(RwLock::new(AsnStore::empty())),
         Arc::new(RwLock::new("Reflet".into())),
         Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(false)),
         Arc::new(RwLock::new(HashMap::new())),
         EventLog::disabled(),
         test_notify(),
@@ -657,6 +663,7 @@ fn test_state_with_attrs() -> AppState {
         Arc::new(RwLock::new(AsnStore::empty())),
         Arc::new(RwLock::new("Reflet".into())),
         Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(false)),
         Arc::new(RwLock::new(HashMap::new())),
         EventLog::disabled(),
         test_notify(),
@@ -697,7 +704,11 @@ async fn get_peer_routes_search_by_origin() {
 #[tokio::test]
 async fn get_peer_routes_search_by_med() {
     let app = build_router(test_state_with_attrs());
-    let (status, body) = get(app, "/api/v1/peers/Router%20A/routes/ipv4?search=med:%3E100").await;
+    let (status, body) = get(
+        app,
+        "/api/v1/peers/Router%20A/routes/ipv4?search=med:%3E100",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     let routes = json["data"].as_array().unwrap();
@@ -799,6 +810,7 @@ async fn refresh_peer_with_channel_returns_200() {
         Arc::new(RwLock::new(AsnStore::empty())),
         Arc::new(RwLock::new("Reflet".into())),
         Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(false)),
         command_channels,
         EventLog::disabled(),
         test_notify(),
@@ -834,6 +846,7 @@ fn test_state_with_events(event_log: EventLog) -> AppState {
         Arc::new(RwLock::new(CommunityStore::empty())),
         Arc::new(RwLock::new(AsnStore::empty())),
         Arc::new(RwLock::new("Reflet".into())),
+        Arc::new(RwLock::new(false)),
         Arc::new(RwLock::new(false)),
         Arc::new(RwLock::new(HashMap::new())),
         event_log,
@@ -964,6 +977,7 @@ async fn peer_ipv4_only_families() {
         Arc::new(RwLock::new(AsnStore::empty())),
         Arc::new(RwLock::new("Reflet".into())),
         Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(false)),
         Arc::new(RwLock::new(HashMap::new())),
         EventLog::disabled(),
         test_notify(),
@@ -1052,6 +1066,7 @@ async fn routes_with_rpki_store_include_status() {
         Arc::new(RwLock::new(AsnStore::empty())),
         Arc::new(RwLock::new("Reflet".into())),
         Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(false)),
         Arc::new(RwLock::new(HashMap::new())),
         EventLog::disabled(),
         test_notify(),
@@ -1094,6 +1109,7 @@ async fn summary_with_rpki_includes_vrp_count() {
         Arc::new(RwLock::new(AsnStore::empty())),
         Arc::new(RwLock::new("Reflet".into())),
         Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(false)),
         Arc::new(RwLock::new(HashMap::new())),
         EventLog::disabled(),
         test_notify(),
@@ -1114,4 +1130,89 @@ async fn summary_without_rpki_omits_field() {
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert!(json.get("rpki").is_none());
+}
+
+// --- Route Refresh Disabled ---
+
+#[tokio::test]
+async fn refresh_peer_disabled_returns_403() {
+    let rib_store = RibStore::new();
+    let peers = Arc::new(RwLock::new(HashMap::new()));
+
+    let mut peer_a = PeerInfo::new(
+        "10.0.0.2".parse().unwrap(),
+        65001,
+        "Router A".into(),
+        String::new(),
+        None,
+        vec![AddressFamily::Ipv4Unicast],
+    );
+    peer_a.state = PeerState::Established;
+    {
+        let mut p = peers.write().unwrap();
+        p.insert(peer_a.id.clone(), Arc::new(RwLock::new(peer_a)));
+    }
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let command_channels: Arc<
+        RwLock<HashMap<String, tokio::sync::mpsc::Sender<reflet_bgp::refresh::SessionCommand>>>,
+    > = Arc::new(RwLock::new(HashMap::new()));
+    {
+        let mut channels = command_channels.write().unwrap();
+        channels.insert("10.0.0.2".to_string(), tx);
+    }
+
+    let state = AppState::new(
+        rib_store,
+        peers,
+        BgpConfig::default(),
+        Arc::new(RwLock::new(CommunityStore::empty())),
+        Arc::new(RwLock::new(AsnStore::empty())),
+        Arc::new(RwLock::new("Reflet".into())),
+        Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(true)), // disable_route_refresh = true
+        command_channels,
+        EventLog::disabled(),
+        test_notify(),
+        Arc::new(RwLock::new(RpkiStore::empty())),
+    );
+    let app = build_router(state);
+
+    let (status, body) = post(app, "/api/v1/peers/Router%20A/refresh").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(json["message"].as_str().unwrap().contains("disabled"));
+}
+
+#[tokio::test]
+async fn summary_includes_route_refresh_enabled() {
+    let app = build_router(test_state());
+    let (status, body) = get(app, "/api/v1/summary").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["route_refresh_enabled"], true);
+}
+
+#[tokio::test]
+async fn summary_route_refresh_disabled() {
+    let state = AppState::new(
+        RibStore::new(),
+        Arc::new(RwLock::new(HashMap::new())),
+        BgpConfig::default(),
+        Arc::new(RwLock::new(CommunityStore::empty())),
+        Arc::new(RwLock::new(AsnStore::empty())),
+        Arc::new(RwLock::new("Reflet".into())),
+        Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(true)), // disable_route_refresh = true
+        Arc::new(RwLock::new(HashMap::new())),
+        EventLog::disabled(),
+        test_notify(),
+        Arc::new(RwLock::new(RpkiStore::empty())),
+    );
+    let app = build_router(state);
+
+    let (status, body) = get(app, "/api/v1/summary").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["route_refresh_enabled"], false);
 }
