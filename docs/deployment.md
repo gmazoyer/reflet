@@ -152,6 +152,20 @@ For a split deployment:
 - Machine B (frontend) must accept connections on **80** from users
 - If the backend API should not be publicly accessible, restrict port 8080 to only Machine B's IP
 
+### Client IP Behind a Reverse Proxy
+
+If the frontend container sits behind an external reverse proxy (Traefik, HAProxy, Caddy, etc.), the "Your IP" field and the `/api/v1/whoami` endpoint will show the proxy's internal Docker address instead of the real client IP. This happens because nginx sees the proxy container as `$remote_addr`.
+
+The frontend image already includes a `realip` configuration in nginx that trusts `X-Forwarded-For` headers from private networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), so no change is needed on the Reflet side.
+
+You must however ensure the reverse proxy forwards the header. For Traefik, add to your static configuration:
+
+```
+--entrypoints.websecure.forwardedHeaders.insecure=true
+```
+
+Or restrict to trusted proxy IPs with `forwardedHeaders.trustedIPs` instead.
+
 ### SSE Proxy Considerations
 
 The backend serves a Server-Sent Events (SSE) endpoint at `/api/v1/events/stream` for real-time updates. If you place a reverse proxy (nginx, Cloudflare, etc.) in front of the backend:
