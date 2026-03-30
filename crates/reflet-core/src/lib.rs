@@ -6,5 +6,6 @@ pub mod peer;
 pub mod prefix;
 pub mod rib;
 pub mod rib_persistence;
+pub mod rib_snapshots;
 pub mod route;
 pub mod rpki;

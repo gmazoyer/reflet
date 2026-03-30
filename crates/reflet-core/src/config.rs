@@ -35,6 +35,8 @@ pub struct Config {
     pub event_log: EventLogConfig,
     #[serde(default)]
     pub rpki: RpkiConfig,
+    #[serde(default)]
+    pub snapshots: Option<SnapshotConfig>,
 }
 
 /// Event log configuration.
@@ -149,6 +151,19 @@ impl Default for GracefulRestartConfig {
     }
 }
 
+/// Periodic RIB snapshot configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotConfig {
+    /// Directory to store snapshot files.
+    pub data_dir: String,
+    /// Maximum number of snapshots to keep per peer.
+    #[serde(default)]
+    pub max_snapshots: Option<usize>,
+    /// Delete snapshots older than this many hours.
+    #[serde(default)]
+    pub max_age_hours: Option<u64>,
+}
+
 /// Per-peer configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerConfig {
@@ -162,6 +177,10 @@ pub struct PeerConfig {
     pub location: Option<String>,
     #[serde(default = "default_families")]
     pub families: Vec<AddressFamily>,
+    /// Interval in seconds between RIB snapshots for this peer.
+    /// Set to 0 or omit to disable snapshots.
+    #[serde(default)]
+    pub snapshot_interval: Option<u64>,
 }
 
 /// Logging configuration.
@@ -292,6 +311,25 @@ impl Config {
                 "rpki.url is required when rpki is enabled".to_string(),
             ));
         }
+        let any_snapshots = self
+            .peers
+            .iter()
+            .any(|p| p.snapshot_interval.is_some_and(|i| i > 0));
+        if any_snapshots {
+            match &self.snapshots {
+                None => {
+                    return Err(ConfigError::Validation(
+                        "[snapshots] section with data_dir is required when any peer has snapshot_interval > 0".to_string(),
+                    ));
+                }
+                Some(s) if s.data_dir.is_empty() => {
+                    return Err(ConfigError::Validation(
+                        "snapshots.data_dir must not be empty".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
         let mut seen_names = std::collections::HashSet::new();
         for peer in &self.peers {
             if peer.remote_asn == 0 {
@@ -310,6 +348,15 @@ impl Config {
                 return Err(ConfigError::Validation(format!(
                     "duplicate peer name '{}'",
                     peer.name
+                )));
+            }
+            if let Some(interval) = peer.snapshot_interval
+                && interval > 0
+                && interval < 60
+            {
+                return Err(ConfigError::Validation(format!(
+                    "peer {} snapshot_interval must be 0 (disabled) or >= 60 seconds",
+                    peer.address
                 )));
             }
         }
@@ -546,6 +593,86 @@ disable_route_refresh = true
     fn disable_route_refresh_defaults_to_false() {
         let config = Config::from_toml("").unwrap();
         assert!(!config.server.disable_route_refresh);
+    }
+
+    #[test]
+    fn parse_snapshot_config() {
+        let toml = r#"
+[snapshots]
+data_dir = "/var/lib/reflet/snapshots"
+max_snapshots = 168
+max_age_hours = 720
+
+[[peers]]
+address = "10.0.0.2"
+remote_asn = 65001
+name = "Router A"
+snapshot_interval = 3600
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        let snap = config.snapshots.unwrap();
+        assert_eq!(snap.data_dir, "/var/lib/reflet/snapshots");
+        assert_eq!(snap.max_snapshots, Some(168));
+        assert_eq!(snap.max_age_hours, Some(720));
+        assert_eq!(config.peers[0].snapshot_interval, Some(3600));
+    }
+
+    #[test]
+    fn snapshot_interval_defaults_to_none() {
+        let toml = r#"
+[[peers]]
+address = "10.0.0.2"
+remote_asn = 65001
+name = "Router A"
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert!(config.peers[0].snapshot_interval.is_none());
+    }
+
+    #[test]
+    fn validate_snapshot_interval_without_section() {
+        let toml = r#"
+[[peers]]
+address = "10.0.0.2"
+remote_asn = 65001
+name = "Router A"
+snapshot_interval = 3600
+"#;
+        let result = Config::from_toml(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("[snapshots]"));
+    }
+
+    #[test]
+    fn validate_snapshot_interval_too_small() {
+        let toml = r#"
+[snapshots]
+data_dir = "/tmp/snapshots"
+
+[[peers]]
+address = "10.0.0.2"
+remote_asn = 65001
+name = "Router A"
+snapshot_interval = 30
+"#;
+        let result = Config::from_toml(toml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains(">= 60"));
+    }
+
+    #[test]
+    fn snapshot_interval_zero_is_disabled() {
+        let toml = r#"
+[[peers]]
+address = "10.0.0.2"
+remote_asn = 65001
+name = "Router A"
+snapshot_interval = 0
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert_eq!(config.peers[0].snapshot_interval, Some(0));
     }
 
     #[test]

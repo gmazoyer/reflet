@@ -16,10 +16,10 @@ const RESTART_MARKER: &str = ".restart_marker";
 
 /// Serializable form of a peer's RIB.
 #[derive(Serialize, Deserialize)]
-struct PersistedPeerRib {
-    peer_id: String,
-    saved_at: DateTime<Utc>,
-    routes: Vec<BgpRoute>,
+pub struct PersistedPeerRib {
+    pub peer_id: String,
+    pub saved_at: DateTime<Utc>,
+    pub routes: Vec<BgpRoute>,
 }
 
 /// Save all peer RIBs to gzipped JSON files in `data_dir`.
