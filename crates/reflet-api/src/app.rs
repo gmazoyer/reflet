@@ -6,7 +6,9 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::rfc8522::handlers as rfc;
-use crate::routes::{asns, communities, events, lookup, metrics, peers, routes, summary, whoami};
+use crate::routes::{
+    asns, communities, events, lookup, metrics, peers, routes, snapshots, summary, whoami,
+};
 use crate::state::AppState;
 
 #[derive(OpenApi)]
@@ -25,6 +27,9 @@ use crate::state::AppState;
         communities::get_definitions,
         asns::get_asns,
         whoami::whoami,
+        snapshots::list_snapshots,
+        snapshots::get_snapshot_ipv4_routes,
+        snapshots::get_snapshot_ipv6_routes,
     ),
     components(schemas(
         reflet_core::peer::PeerInfo,
@@ -57,6 +62,8 @@ use crate::state::AppState;
         events::EventsResponse,
         reflet_core::rpki::RpkiStatus,
         summary::RpkiSummary,
+        reflet_core::rib_snapshots::SnapshotMeta,
+        snapshots::SnapshotListResponse,
     )),
     tags(
         (name = "summary", description = "System summary and health"),
@@ -66,6 +73,7 @@ use crate::state::AppState;
         (name = "communities", description = "Community definitions"),
         (name = "asns", description = "ASN information"),
         (name = "events", description = "Route change events"),
+        (name = "snapshots", description = "Historical RIB snapshots"),
     )
 )]
 struct ApiDoc;
@@ -96,7 +104,19 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/v1/whoami", axum::routing::get(whoami::whoami))
         .route("/api/v1/asns", axum::routing::get(asns::get_asns))
-        .route("/api/v1/events", axum::routing::get(events::get_events));
+        .route("/api/v1/events", axum::routing::get(events::get_events))
+        .route(
+            "/api/v1/peers/{id}/snapshots",
+            axum::routing::get(snapshots::list_snapshots),
+        )
+        .route(
+            "/api/v1/peers/{id}/snapshots/{timestamp}/routes/ipv4",
+            axum::routing::get(snapshots::get_snapshot_ipv4_routes),
+        )
+        .route(
+            "/api/v1/peers/{id}/snapshots/{timestamp}/routes/ipv6",
+            axum::routing::get(snapshots::get_snapshot_ipv6_routes),
+        );
 
     // RFC 8522 compatibility routes
     let rfc8522_routes = Router::new()

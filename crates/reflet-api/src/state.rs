@@ -32,6 +32,7 @@ pub struct AppState {
     pub event_notify: Arc<tokio::sync::Notify>,
     pub shutdown: Arc<AtomicBool>,
     pub rpki_store: Arc<RwLock<RpkiStore>>,
+    pub snapshot_data_dir: Option<String>,
 }
 
 impl AppState {
@@ -51,6 +52,7 @@ impl AppState {
         event_log: EventLog,
         event_notify: Arc<tokio::sync::Notify>,
         rpki_store: Arc<RwLock<RpkiStore>>,
+        snapshot_data_dir: Option<String>,
     ) -> Self {
         Self {
             rib_store,
@@ -66,6 +68,7 @@ impl AppState {
             event_notify,
             shutdown: Arc::new(AtomicBool::new(false)),
             rpki_store,
+            snapshot_data_dir,
         }
     }
 

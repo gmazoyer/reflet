@@ -16,6 +16,7 @@ pub struct SummaryResponse {
     pub total_ipv4_prefixes: usize,
     pub total_ipv6_prefixes: usize,
     pub route_refresh_enabled: bool,
+    pub snapshots_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpki: Option<RpkiSummary>,
 }
@@ -49,6 +50,7 @@ pub async fn get_summary(State(state): State<AppState>) -> Json<SummaryResponse>
     };
 
     let route_refresh_enabled = !*state.disable_route_refresh.read().unwrap();
+    let snapshots_enabled = state.snapshot_data_dir.is_some();
 
     Json(SummaryResponse {
         title: state.title.read().unwrap().clone(),
@@ -59,6 +61,7 @@ pub async fn get_summary(State(state): State<AppState>) -> Json<SummaryResponse>
         total_ipv4_prefixes: total_v4,
         total_ipv6_prefixes: total_v6,
         route_refresh_enabled,
+        snapshots_enabled,
         rpki,
     })
 }
