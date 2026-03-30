@@ -1,4 +1,5 @@
 mod rpki;
+mod snapshots;
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -188,6 +189,7 @@ async fn main() -> Result<()> {
     let disable_route_refresh = Arc::new(RwLock::new(config.server.disable_route_refresh));
 
     // Create API state
+    let snapshot_data_dir = config.snapshots.as_ref().map(|s| s.data_dir.clone());
     let state = AppState::new(
         rib_store,
         speaker.peers(),
@@ -201,6 +203,7 @@ async fn main() -> Result<()> {
         event_log.clone(),
         event_notify,
         rpki_store.clone(),
+        snapshot_data_dir,
     );
 
     // Spawn SIGHUP handler for config reload
@@ -295,6 +298,9 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Start snapshot tasks for peers that have snapshot_interval configured
+    let snapshot_handles = snapshots::spawn_snapshot_tasks(&config, &rib_store_main);
+
     // Start HTTP server
     let listener = tokio::net::TcpListener::bind(config.server.listen).await?;
     info!(addr = %config.server.listen, "HTTP server listening");
@@ -327,6 +333,9 @@ async fn main() -> Result<()> {
     }
 
     bgp_handle.abort();
+    for handle in snapshot_handles {
+        handle.abort();
+    }
 
     Ok(())
 }
