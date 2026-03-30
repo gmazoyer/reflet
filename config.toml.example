@@ -39,6 +39,7 @@ name = "Router A"               # short label shown in UI, metrics, and lookup r
 description = "Primary border router in Amsterdam DC1"  # longer text shown in peer list
 location = "DC1, Amsterdam"     # optional: city, datacenter, etc.
 families = ["ipv4-unicast", "ipv6-unicast"]
+# snapshot_interval = 3600      # take a RIB snapshot every hour (requires [snapshots])
 
 [[peers]]
 address = "10.0.0.3"
@@ -63,6 +64,14 @@ families = ["ipv4-unicast", "ipv6-unicast"]
 # enabled = true
 # url = "https://rpki.example.com"    # Routinator base URL (fetches /json)
 # refresh_interval = 300               # seconds between VRP refreshes
+
+# Periodic RIB snapshots (optional)
+# Take periodic snapshots of each peer's RIB, browsable via the API and web UI.
+# Required when any peer has snapshot_interval set.
+# [snapshots]
+# data_dir = "/var/lib/reflet/snapshots"
+# max_snapshots = 168              # maximum snapshots per peer (optional)
+# max_age_hours = 720              # delete snapshots older than this (optional, 30 days)
 
 # Event log: record route announcements, withdrawals, and session changes
 # [event_log]

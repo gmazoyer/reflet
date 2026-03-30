@@ -83,6 +83,7 @@ An array of BGP peer configurations. Each `[[peers]]` entry defines one BGP sess
 | `description` | string | `""` | Longer description shown in the peer list. |
 | `location` | string | *(none)* | Free-text location (city, datacenter, etc.) displayed alongside the peer. |
 | `families` | list of strings | `["ipv4-unicast", "ipv6-unicast"]` | Address families to negotiate. Valid values: `ipv4-unicast`, `ipv6-unicast`. |
+| `snapshot_interval` | integer (u64) | *(none)* | Seconds between RIB snapshots for this peer. Set to `0` or omit to disable. Minimum `60`. Requires a `[snapshots]` section. |
 
 ```toml
 [[peers]]
@@ -136,6 +137,25 @@ buffer_size = 10000
 file = "/var/log/reflet/events.jsonl"
 ```
 
+## `[snapshots]`
+
+Periodic RIB snapshots. Takes a point-in-time copy of each peer's RIB at a configurable interval, stored on disk as gzipped JSON. Snapshots are browsable through the API and the web UI. This section is required when any peer has `snapshot_interval` set.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `data_dir` | string | *(required)* | Directory to store snapshot files. Each peer gets a subdirectory. |
+| `max_snapshots` | integer | *(none)* | Maximum number of snapshots to keep per peer. Oldest are deleted when exceeded. |
+| `max_age_hours` | integer | *(none)* | Delete snapshots older than this many hours. |
+
+```toml
+[snapshots]
+data_dir = "/var/lib/reflet/snapshots"
+max_snapshots = 168
+max_age_hours = 720
+```
+
+When using Docker, mount the `data_dir` as a volume to persist snapshots across container restarts.
+
 ## `[logging]`
 
 Controls the application log output.
@@ -163,5 +183,7 @@ The configuration is validated at startup. The following rules are enforced:
 - Each peer's `remote_asn` must be greater than 0
 - Each peer's `name` must not be empty
 - Peer names must be unique across all `[[peers]]` entries
+- `[snapshots]` section with `data_dir` is required when any peer has `snapshot_interval > 0`
+- `snapshot_interval` must be `0` (disabled) or `>= 60` seconds
 
 Use `reflet --check --config config.toml` to validate the configuration without starting the server.
