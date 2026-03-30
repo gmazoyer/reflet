@@ -156,6 +156,8 @@ max_age_hours = 720
 
 When using Docker, mount the `data_dir` as a volume to persist snapshots across container restarts.
 
+> **Warning:** Snapshot browsing is not recommended for public-facing instances. Each snapshot request loads and decompresses a full RIB from disk, which is significantly more expensive than serving live routes from memory. A malicious user could abuse this to exhaust CPU and memory. Only enable snapshots on private or access-controlled instances.
+
 ## `[logging]`
 
 Controls the application log output.
