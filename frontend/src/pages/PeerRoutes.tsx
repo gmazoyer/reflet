@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
-import { usePeer, usePeerRoutes, useAsnInfo, useCommunityDefinitions, useRefreshPeer, useSummary } from "../hooks/useApi";
+import { usePeer, usePeerRoutes, useAsnInfo, useCommunityDefinitions, useRefreshPeer, useSummary, useSnapshots, useSnapshotRoutes } from "../hooks/useApi";
 import { isHiddenAddress } from "../utils/hiddenAddress";
 import ClearButton from "../components/ClearButton";
 import Pagination from "../components/Pagination";
@@ -17,19 +17,34 @@ export default function PeerRoutes() {
   const [showFilterHelp, setShowFilterHelp] = useState(false);
 
   const [refreshMessage, setRefreshMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [mode, setMode] = useState<"live" | "snapshot">("live");
+  const [selectedSnapshot, setSelectedSnapshot] = useState<string | null>(null);
 
   const { data: asnInfo } = useAsnInfo();
   const { data: communityDefs } = useCommunityDefinitions();
   const { data: summary } = useSummary();
   const { data: peer, isLoading: peerLoading } = usePeer(id!);
   const refreshMutation = useRefreshPeer();
-  const { data: routes, isLoading: routesLoading } = usePeerRoutes(
+  const { data: snapshots } = useSnapshots(id!, summary?.snapshots_enabled !== false);
+  const { data: liveRoutes, isLoading: liveRoutesLoading } = usePeerRoutes(
     id!,
     af,
     page,
     perPage,
     search || undefined,
   );
+  const { data: snapshotRoutes, isLoading: snapshotRoutesLoading } = useSnapshotRoutes(
+    id!,
+    selectedSnapshot ?? "",
+    af,
+    page,
+    perPage,
+    search || undefined,
+  );
+
+  const isSnapshotMode = mode === "snapshot" && selectedSnapshot;
+  const routes = isSnapshotMode ? snapshotRoutes : liveRoutes;
+  const routesLoading = isSnapshotMode ? snapshotRoutesLoading : liveRoutesLoading;
 
   useEffect(() => {
     if (refreshMessage) {
@@ -57,6 +72,18 @@ export default function PeerRoutes() {
     setPage(1);
     setSearch("");
     setSearchInput("");
+  }
+
+  function handleModeChange(newMode: "live" | "snapshot") {
+    setMode(newMode);
+    setPage(1);
+    setSearch("");
+    setSearchInput("");
+    if (newMode === "live") {
+      setSelectedSnapshot(null);
+    } else if (snapshots?.snapshots.length) {
+      setSelectedSnapshot(snapshots.snapshots[0].timestamp);
+    }
   }
 
   const totalPages = routes ? Math.ceil(routes.meta.total / perPage) : 0;
@@ -128,6 +155,12 @@ export default function PeerRoutes() {
         </div>
       )}
 
+      {isSnapshotMode && (
+        <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-2 text-sm text-amber-800 dark:text-amber-200">
+          Viewing snapshot from {new Date(selectedSnapshot).toLocaleString()}
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
         <ToggleGroup
           options={[
@@ -143,6 +176,35 @@ export default function PeerRoutes() {
           value={af}
           onChange={handleAfChange}
         />
+
+        {summary?.snapshots_enabled !== false && snapshots && snapshots.snapshots.length > 0 && (
+          <div className="flex items-center gap-2">
+            <ToggleGroup
+              options={[
+                { value: "live" as const, label: "Live" },
+                { value: "snapshot" as const, label: "History" },
+              ]}
+              value={mode}
+              onChange={handleModeChange}
+            />
+            {mode === "snapshot" && (
+              <select
+                value={selectedSnapshot ?? ""}
+                onChange={(e) => {
+                  setSelectedSnapshot(e.target.value);
+                  setPage(1);
+                }}
+                className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              >
+                {snapshots.snapshots.map((s) => (
+                  <option key={s.timestamp} value={s.timestamp}>
+                    {new Date(s.timestamp).toLocaleString()} ({s.route_count.toLocaleString()} routes)
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
 
         <form onSubmit={handleSearch} className="flex gap-2 flex-1">
           <div className="relative flex-1">
