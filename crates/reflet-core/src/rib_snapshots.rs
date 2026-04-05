@@ -137,10 +137,7 @@ pub fn save_snapshot(
 }
 
 /// List available snapshots for a peer, sorted newest-first.
-pub fn list_snapshots(
-    data_dir: &str,
-    peer_id: &str,
-) -> Result<Vec<SnapshotMeta>, std::io::Error> {
+pub fn list_snapshots(data_dir: &str, peer_id: &str) -> Result<Vec<SnapshotMeta>, std::io::Error> {
     let dir = snapshot_dir(data_dir, peer_id);
     if !dir.exists() {
         return Ok(vec![]);
@@ -314,11 +311,7 @@ mod tests {
             let rib_arc = store.get_or_create("10.0.0.1");
             let mut rib = rib_arc.write().unwrap();
             rib.insert(make_route("10.0.0.0/24", "10.0.0.1", vec![65000, 65001]));
-            rib.insert(make_route(
-                "192.168.0.0/16",
-                "10.0.0.1",
-                vec![65000, 65002],
-            ));
+            rib.insert(make_route("192.168.0.0/16", "10.0.0.1", vec![65000, 65002]));
             rib.insert(make_route("2001:db8::/32", "::1", vec![65000, 65003]));
         }
         store

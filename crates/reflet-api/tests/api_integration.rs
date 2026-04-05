@@ -1259,11 +1259,7 @@ fn test_state_with_snapshots(data_dir: &str) -> AppState {
         let mut rib = rib_arc.write().unwrap();
         rib.insert(make_route("10.0.0.0/24", "10.0.0.1", vec![65001, 65010]));
         rib.insert(make_route("192.168.0.0/16", "10.0.0.1", vec![65001]));
-        rib.insert(make_route(
-            "2001:db8::/32",
-            "::1",
-            vec![65001, 65020],
-        ));
+        rib.insert(make_route("2001:db8::/32", "::1", vec![65001, 65020]));
     }
 
     AppState::new(
@@ -1366,9 +1362,7 @@ async fn browse_snapshot_with_search() {
 
     let ts = meta.timestamp.format("%Y-%m-%dT%H-%M-%SZ").to_string();
     let app = build_router(state);
-    let url = format!(
-        "/api/v1/peers/Router%20A/snapshots/{ts}/routes/ipv4?search=AS65010"
-    );
+    let url = format!("/api/v1/peers/Router%20A/snapshots/{ts}/routes/ipv4?search=AS65010");
     let (status, body) = get(app, &url).await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();

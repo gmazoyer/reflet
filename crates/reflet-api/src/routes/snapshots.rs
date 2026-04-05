@@ -34,9 +34,7 @@ fn parse_snapshot_timestamp(ts: &str) -> Result<DateTime<Utc>, ApiError> {
     // Accept both filesystem-safe format (2026-03-26T14-00-00Z) and RFC 3339
     chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H-%M-%SZ")
         .map(|naive| naive.and_utc())
-        .or_else(|_| {
-            DateTime::parse_from_rfc3339(ts).map(|dt| dt.with_timezone(&Utc))
-        })
+        .or_else(|_| DateTime::parse_from_rfc3339(ts).map(|dt| dt.with_timezone(&Utc)))
         .map_err(|_| ApiError::BadRequest(format!("invalid timestamp: {ts}")))
 }
 
@@ -151,7 +149,10 @@ async fn get_snapshot_routes(
 )]
 pub async fn get_snapshot_ipv4_routes(
     State(state): State<AppState>,
-    Path(SnapshotPath { id: name, timestamp }): Path<SnapshotPath>,
+    Path(SnapshotPath {
+        id: name,
+        timestamp,
+    }): Path<SnapshotPath>,
     Query(params): Query<PaginationParams>,
 ) -> Result<(HeaderMap, Json<PaginatedRoutes>), ApiError> {
     get_snapshot_routes(&state, &name, &timestamp, &params, true).await
@@ -174,7 +175,10 @@ pub async fn get_snapshot_ipv4_routes(
 )]
 pub async fn get_snapshot_ipv6_routes(
     State(state): State<AppState>,
-    Path(SnapshotPath { id: name, timestamp }): Path<SnapshotPath>,
+    Path(SnapshotPath {
+        id: name,
+        timestamp,
+    }): Path<SnapshotPath>,
     Query(params): Query<PaginationParams>,
 ) -> Result<(HeaderMap, Json<PaginatedRoutes>), ApiError> {
     get_snapshot_routes(&state, &name, &timestamp, &params, false).await
