@@ -7,6 +7,7 @@ import type {
   CommunityDefinitions,
   AsnMap,
   WhoamiResponse,
+  SnapshotListResponse,
 } from "./types";
 
 const api = axios.create({
@@ -68,6 +69,32 @@ export async function getAsnInfo(): Promise<AsnMap> {
 export async function getCommunityDefinitions(): Promise<CommunityDefinitions> {
   const { data } = await api.get<CommunityDefinitions>(
     "/api/v1/communities/definitions",
+  );
+  return data;
+}
+
+export async function getSnapshots(
+  peerId: string,
+): Promise<SnapshotListResponse> {
+  const { data } = await api.get<SnapshotListResponse>(
+    `/api/v1/peers/${encodeURIComponent(peerId)}/snapshots`,
+  );
+  return data;
+}
+
+export async function getSnapshotRoutes(
+  peerId: string,
+  timestamp: string,
+  af: "ipv4" | "ipv6",
+  page = 1,
+  perPage = 100,
+  search?: string,
+): Promise<PaginatedRoutes> {
+  const params: Record<string, string | number> = { page, per_page: perPage };
+  if (search) params.search = search;
+  const { data } = await api.get<PaginatedRoutes>(
+    `/api/v1/peers/${encodeURIComponent(peerId)}/snapshots/${encodeURIComponent(timestamp)}/routes/${af}`,
+    { params },
   );
   return data;
 }

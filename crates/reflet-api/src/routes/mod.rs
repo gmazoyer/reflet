@@ -6,5 +6,6 @@ pub mod metrics;
 pub mod peers;
 #[allow(clippy::module_inception)]
 pub mod routes;
+pub mod snapshots;
 pub mod summary;
 pub mod whoami;

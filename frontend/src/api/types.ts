@@ -88,6 +88,7 @@ export interface SummaryResponse {
   total_ipv4_prefixes: number;
   total_ipv6_prefixes: number;
   route_refresh_enabled: boolean;
+  snapshots_enabled: boolean;  // true when any peer has snapshot_interval configured
   rpki?: RpkiSummary | null;
 }
 
@@ -130,6 +131,18 @@ export interface CommunityRange {
   segments: SegmentMatcher[];
   description: string;
   type: "standard" | "large";
+}
+
+export interface SnapshotMeta {
+  peer_id: string;
+  timestamp: string;
+  route_count: number;
+  ipv4_count: number;
+  ipv6_count: number;
+}
+
+export interface SnapshotListResponse {
+  snapshots: SnapshotMeta[];
 }
 
 export interface CommunityDefinitions {

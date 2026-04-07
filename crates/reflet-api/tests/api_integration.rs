@@ -85,6 +85,7 @@ fn test_state() -> AppState {
         EventLog::disabled(),
         test_notify(),
         Arc::new(RwLock::new(RpkiStore::empty())),
+        None,
     )
 }
 
@@ -512,6 +513,7 @@ async fn lookup_exact_returns_multiple_paths() {
         EventLog::disabled(),
         test_notify(),
         Arc::new(RwLock::new(RpkiStore::empty())),
+        None,
     );
     let app = build_router(state);
 
@@ -668,6 +670,7 @@ fn test_state_with_attrs() -> AppState {
         EventLog::disabled(),
         test_notify(),
         Arc::new(RwLock::new(RpkiStore::empty())),
+        None,
     )
 }
 
@@ -815,6 +818,7 @@ async fn refresh_peer_with_channel_returns_200() {
         EventLog::disabled(),
         test_notify(),
         Arc::new(RwLock::new(RpkiStore::empty())),
+        None,
     );
     let app = build_router(state);
 
@@ -852,6 +856,7 @@ fn test_state_with_events(event_log: EventLog) -> AppState {
         event_log,
         test_notify(),
         Arc::new(RwLock::new(RpkiStore::empty())),
+        None,
     )
 }
 
@@ -982,6 +987,7 @@ async fn peer_ipv4_only_families() {
         EventLog::disabled(),
         test_notify(),
         Arc::new(RwLock::new(RpkiStore::empty())),
+        None,
     );
     let app = build_router(state);
 
@@ -1071,6 +1077,7 @@ async fn routes_with_rpki_store_include_status() {
         EventLog::disabled(),
         test_notify(),
         Arc::new(RwLock::new(rpki_store)),
+        None,
     );
     let app = build_router(state);
 
@@ -1114,6 +1121,7 @@ async fn summary_with_rpki_includes_vrp_count() {
         EventLog::disabled(),
         test_notify(),
         Arc::new(RwLock::new(rpki_store)),
+        None,
     );
     let app = build_router(state);
 
@@ -1175,6 +1183,7 @@ async fn refresh_peer_disabled_returns_403() {
         EventLog::disabled(),
         test_notify(),
         Arc::new(RwLock::new(RpkiStore::empty())),
+        None,
     );
     let app = build_router(state);
 
@@ -1208,6 +1217,7 @@ async fn summary_route_refresh_disabled() {
         EventLog::disabled(),
         test_notify(),
         Arc::new(RwLock::new(RpkiStore::empty())),
+        None,
     );
     let app = build_router(state);
 
@@ -1215,4 +1225,171 @@ async fn summary_route_refresh_disabled() {
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["route_refresh_enabled"], false);
+}
+
+// --- Snapshots ---
+
+fn test_state_with_snapshots(data_dir: &str) -> AppState {
+    let rib_store = RibStore::new();
+    let peers_map: HashMap<String, Arc<RwLock<PeerInfo>>> = HashMap::new();
+    let peers = Arc::new(RwLock::new(peers_map));
+
+    // Create a peer
+    let peer_a = PeerInfo {
+        id: "10.0.0.1".to_string(),
+        name: "Router A".to_string(),
+        description: "Test router".to_string(),
+        location: None,
+        address: "10.0.0.1".parse().unwrap(),
+        remote_asn: 65001,
+        state: PeerState::Established,
+        router_id: "10.0.0.1".parse().unwrap(),
+        families: vec![AddressFamily::Ipv4Unicast, AddressFamily::Ipv6Unicast],
+        prefixes: PrefixCounts { ipv4: 1, ipv6: 0 },
+        uptime: None,
+    };
+    peers
+        .write()
+        .unwrap()
+        .insert(peer_a.id.clone(), Arc::new(RwLock::new(peer_a.clone())));
+
+    // Populate RIB so we can snapshot it
+    {
+        let rib_arc = rib_store.get_or_create(&peer_a.id);
+        let mut rib = rib_arc.write().unwrap();
+        rib.insert(make_route("10.0.0.0/24", "10.0.0.1", vec![65001, 65010]));
+        rib.insert(make_route("192.168.0.0/16", "10.0.0.1", vec![65001]));
+        rib.insert(make_route("2001:db8::/32", "::1", vec![65001, 65020]));
+    }
+
+    AppState::new(
+        rib_store,
+        peers,
+        BgpConfig::default(),
+        Arc::new(RwLock::new(CommunityStore::empty())),
+        Arc::new(RwLock::new(AsnStore::empty())),
+        Arc::new(RwLock::new("Reflet".into())),
+        Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(HashMap::new())),
+        EventLog::disabled(),
+        test_notify(),
+        Arc::new(RwLock::new(RpkiStore::empty())),
+        Some(data_dir.to_string()),
+    )
+}
+
+#[tokio::test]
+async fn list_snapshots_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state_with_snapshots(dir.path().to_str().unwrap());
+    let app = build_router(state);
+
+    let (status, body) = get(app, "/api/v1/peers/Router%20A/snapshots").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["snapshots"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn list_snapshots_with_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+    let state = test_state_with_snapshots(data_dir);
+
+    // Save a snapshot
+    reflet_core::rib_snapshots::save_snapshot(&state.rib_store, "10.0.0.1", data_dir).unwrap();
+
+    let app = build_router(state);
+    let (status, body) = get(app, "/api/v1/peers/Router%20A/snapshots").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let snapshots = json["snapshots"].as_array().unwrap();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0]["route_count"], 3);
+    assert_eq!(snapshots[0]["ipv4_count"], 2);
+    assert_eq!(snapshots[0]["ipv6_count"], 1);
+}
+
+#[tokio::test]
+async fn browse_snapshot_ipv4_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+    let state = test_state_with_snapshots(data_dir);
+
+    let meta = reflet_core::rib_snapshots::save_snapshot(&state.rib_store, "10.0.0.1", data_dir)
+        .unwrap()
+        .unwrap();
+
+    let ts = meta.timestamp.format("%Y-%m-%dT%H-%M-%SZ").to_string();
+    let app = build_router(state);
+    let url = format!("/api/v1/peers/Router%20A/snapshots/{ts}/routes/ipv4");
+    let (status, body) = get(app, &url).await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["meta"]["total"], 2);
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn browse_snapshot_ipv6_routes() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+    let state = test_state_with_snapshots(data_dir);
+
+    let meta = reflet_core::rib_snapshots::save_snapshot(&state.rib_store, "10.0.0.1", data_dir)
+        .unwrap()
+        .unwrap();
+
+    let ts = meta.timestamp.format("%Y-%m-%dT%H-%M-%SZ").to_string();
+    let app = build_router(state);
+    let url = format!("/api/v1/peers/Router%20A/snapshots/{ts}/routes/ipv6");
+    let (status, body) = get(app, &url).await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["meta"]["total"], 1);
+}
+
+#[tokio::test]
+async fn browse_snapshot_with_search() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+    let state = test_state_with_snapshots(data_dir);
+
+    let meta = reflet_core::rib_snapshots::save_snapshot(&state.rib_store, "10.0.0.1", data_dir)
+        .unwrap()
+        .unwrap();
+
+    let ts = meta.timestamp.format("%Y-%m-%dT%H-%M-%SZ").to_string();
+    let app = build_router(state);
+    let url = format!("/api/v1/peers/Router%20A/snapshots/{ts}/routes/ipv4?search=AS65010");
+    let (status, body) = get(app, &url).await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    // Only the route with AS65010 in its path should match
+    assert_eq!(json["meta"]["total"], 1);
+}
+
+#[tokio::test]
+async fn snapshot_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state_with_snapshots(dir.path().to_str().unwrap());
+    let app = build_router(state);
+
+    let (status, _) = get(
+        app,
+        "/api/v1/peers/Router%20A/snapshots/2099-01-01T00-00-00Z/routes/ipv4",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn snapshots_not_configured() {
+    // State with snapshot_data_dir = None
+    let state = test_state();
+    let app = build_router(state);
+
+    let (status, _) = get(app, "/api/v1/peers/Router%20A/snapshots").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

@@ -9,6 +9,8 @@ import {
   getAsnInfo,
   getCommunityDefinitions,
   refreshPeer,
+  getSnapshots,
+  getSnapshotRoutes,
 } from "../api/client";
 
 export function useSummary() {
@@ -76,6 +78,29 @@ export function useCommunityDefinitions() {
     queryKey: ["communityDefinitions"],
     queryFn: getCommunityDefinitions,
     staleTime: Infinity,
+  });
+}
+
+export function useSnapshots(peerId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["snapshots", peerId],
+    queryFn: () => getSnapshots(peerId),
+    enabled: !!peerId && enabled,
+  });
+}
+
+export function useSnapshotRoutes(
+  peerId: string,
+  timestamp: string,
+  af: "ipv4" | "ipv6",
+  page: number,
+  perPage: number,
+  search?: string,
+) {
+  return useQuery({
+    queryKey: ["snapshotRoutes", peerId, timestamp, af, page, perPage, search],
+    queryFn: () => getSnapshotRoutes(peerId, timestamp, af, page, perPage, search),
+    enabled: !!peerId && !!timestamp,
   });
 }
 

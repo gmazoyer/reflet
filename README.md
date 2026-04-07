@@ -12,6 +12,8 @@ Routes can be searched by prefix (exact, longest-prefix-match, or more-specifics
 
 The web frontend streams route changes in real time over Server-Sent Events, so the view stays current without polling. Communities are shown with human-readable names if you provide definition files, and AS numbers are enriched with names and countries from [IPInfo Lite](https://ipinfo.io/lite) datasets.
 
+Optionally, Reflet can take periodic snapshots of each peer's RIB and let you browse historical routing state through the same interface. Note that snapshot browsing is resource-intensive and should not be enabled on public instances (see [configuration docs](docs/configuration.md) for details).
+
 For automation, the backend exposes a REST API following the RFC 8522 Looking Glass standard, with interactive Swagger UI at `/docs` and Prometheus metrics at `/metrics`.
 
 ## Quick Start
