@@ -44,6 +44,9 @@ pub struct PeerInfo {
     pub state: PeerState,
     pub uptime: Option<DateTime<Utc>>,
     pub prefixes: PrefixCounts,
+    /// Position in the configuration file (used to preserve display order).
+    #[serde(skip)]
+    pub order: usize,
 }
 
 impl PeerInfo {
@@ -69,6 +72,7 @@ impl PeerInfo {
             state: PeerState::Idle,
             uptime: None,
             prefixes: PrefixCounts::default(),
+            order: 0,
         }
     }
 }

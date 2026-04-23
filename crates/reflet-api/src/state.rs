@@ -72,13 +72,15 @@ impl AppState {
         }
     }
 
-    /// Get a snapshot of all peer infos.
+    /// Get a snapshot of all peer infos, ordered by config file position.
     pub fn peer_infos(&self) -> Vec<PeerInfo> {
         let peers = self.peers.read().unwrap();
-        peers
+        let mut infos: Vec<PeerInfo> = peers
             .values()
             .filter_map(|p| p.read().ok().map(|info| self.sanitize_peer(info.clone())))
-            .collect()
+            .collect();
+        infos.sort_by_key(|p| p.order);
+        infos
     }
 
     /// Resolve a peer name (from the URL) to its internal peer ID.

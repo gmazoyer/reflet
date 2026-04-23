@@ -48,8 +48,8 @@ impl BgpSpeaker {
         let mut peer_map = HashMap::new();
 
         // Initialize peer info for each configured peer
-        for pc in &peer_configs {
-            let info = PeerInfo::new(
+        for (i, pc) in peer_configs.iter().enumerate() {
+            let mut info = PeerInfo::new(
                 pc.address,
                 pc.remote_asn,
                 pc.name.clone(),
@@ -57,6 +57,7 @@ impl BgpSpeaker {
                 pc.location.clone(),
                 pc.families.clone(),
             );
+            info.order = i;
             peer_map.insert(info.id.clone(), Arc::new(RwLock::new(info)));
         }
 

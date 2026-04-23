@@ -1247,6 +1247,7 @@ fn test_state_with_snapshots(data_dir: &str) -> AppState {
         families: vec![AddressFamily::Ipv4Unicast, AddressFamily::Ipv6Unicast],
         prefixes: PrefixCounts { ipv4: 1, ipv6: 0 },
         uptime: None,
+        order: 0,
     };
     peers
         .write()
