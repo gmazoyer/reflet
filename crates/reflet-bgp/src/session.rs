@@ -14,7 +14,7 @@ use reflet_core::peer::{PeerId, PeerInfo, PeerState, PrefixCounts};
 use reflet_core::prefix::AddressFamily;
 use reflet_core::rib::RibStore;
 
-use crate::codec::{self, BGP_MAX_MSG_SIZE, RawMessageType};
+use crate::codec::{self, BGP_MAX_MSG_SIZE, MessageReader, RawMessageType};
 use crate::error::BgpSessionError;
 use crate::graceful_restart::{self, PeerGrInfo};
 use crate::refresh::{
@@ -69,6 +69,7 @@ impl BgpSession {
     pub async fn run_with_stream(&mut self, mut stream: TcpStream) -> Result<(), BgpSessionError> {
         let peer_id = self.peer_id();
         let mut buf = vec![0u8; BGP_MAX_MSG_SIZE];
+        let mut reader = MessageReader::default();
         let mut params = self.local_params.clone();
 
         info!(peer = %peer_id, "BGP session starting");
@@ -81,10 +82,10 @@ impl BgpSession {
         self.set_state(PeerState::OpenSent);
         debug!(peer = %peer_id, "sent OPEN message");
 
-        // Receive OPEN from peer (use read_message_raw to handle type 5)
+        // Receive OPEN from peer (the reader handles type 5)
         let (msg_type, msg_len) = timeout(
             Duration::from_secs(30),
-            codec::read_message_raw(&mut stream, &params, &mut buf),
+            reader.read_message(&mut stream, &params, &mut buf),
         )
         .await
         .map_err(|_| BgpSessionError::Protocol("timeout waiting for OPEN".into()))??;
@@ -177,7 +178,7 @@ impl BgpSession {
         // Wait for peer's KEEPALIVE
         let (msg_type, _msg_len) = timeout(
             Duration::from_secs(30),
-            codec::read_message_raw(&mut stream, &params, &mut buf),
+            reader.read_message(&mut stream, &params, &mut buf),
         )
         .await
         .map_err(|_| BgpSessionError::Protocol("timeout waiting for KEEPALIVE".into()))??;
@@ -333,7 +334,7 @@ impl BgpSession {
                 }
 
                 // Read incoming message
-                result = codec::read_message_raw(&mut stream, &params, &mut buf) => {
+                result = reader.read_message(&mut stream, &params, &mut buf) => {
                     let (msg_type, msg_len) = result?;
                     last_received = Instant::now();
 

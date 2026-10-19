@@ -1,3 +1,6 @@
+use std::io;
+
+use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use zettabgp::prelude::*;
@@ -26,59 +29,91 @@ pub struct RouteRefreshMessage {
     pub safi: u8,
 }
 
-/// Read one complete BGP message from the stream, handling type 5 (Route Refresh)
-/// that zettabgp doesn't support.
-/// Returns the message type and body length (body is in buf[..body_len]).
-pub async fn read_message_raw(
-    stream: &mut TcpStream,
-    params: &BgpSessionParams,
-    buf: &mut [u8],
-) -> Result<(RawMessageType, usize), BgpSessionError> {
-    // Read the 19-byte header
-    stream.read_exact(&mut buf[..BGP_HEADER_SIZE]).await?;
+/// Reads BGP messages from a stream, handling type 5 (Route Refresh) that
+/// zettabgp doesn't support.
+///
+/// Bytes stay in an internal buffer until they form a complete message, so
+/// `read_message` is cancel safe: it can be a branch of `tokio::select!` next
+/// to a timer without losing part of a message. Use one reader for the whole
+/// session.
+#[derive(Debug, Default)]
+pub struct MessageReader {
+    rbuf: BytesMut,
+}
 
-    // Validate marker (first 16 bytes must be 0xFF)
-    if buf[..16] != [0xFF; 16] {
-        return Err(BgpSessionError::Protocol("invalid BGP marker".into()));
-    }
-
-    // Extract length (bytes 16-17, big-endian)
-    let msg_len = u16::from_be_bytes([buf[16], buf[17]]) as usize;
-    if !(BGP_HEADER_SIZE..=BGP_MAX_MSG_SIZE).contains(&msg_len) {
-        return Err(BgpSessionError::Protocol(format!(
-            "invalid message length: {msg_len}"
-        )));
-    }
-
-    let msg_type_byte = buf[18];
-    let body_len = msg_len - BGP_HEADER_SIZE;
-
-    if msg_type_byte == MSG_TYPE_ROUTE_REFRESH {
-        // Route Refresh — handle ourselves
-        if body_len > 0 {
-            if body_len > buf.len() {
-                return Err(BgpSessionError::Protocol(format!(
-                    "message too large: {body_len} bytes"
-                )));
+impl MessageReader {
+    /// Read one complete BGP message.
+    /// Returns the message type and body length (body is in buf[..body_len]).
+    pub async fn read_message(
+        &mut self,
+        stream: &mut TcpStream,
+        params: &BgpSessionParams,
+        buf: &mut [u8],
+    ) -> Result<(RawMessageType, usize), BgpSessionError> {
+        loop {
+            if let Some(message) = self.take_message(params, buf)? {
+                return Ok(message);
             }
-            stream.read_exact(&mut buf[..body_len]).await?;
+
+            // `read_buf` is the only await point and is cancel safe: bytes
+            // already read stay in `rbuf` for the next call.
+            self.rbuf.reserve(BGP_MAX_MSG_SIZE);
+            if stream.read_buf(&mut self.rbuf).await? == 0 {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "early eof").into());
+            }
         }
-        return Ok((RawMessageType::RouteRefresh, body_len));
     }
 
-    // Standard message types (1-4) — use zettabgp's decode
-    let (msg_type, decoded_body_len) = params.decode_message_head(buf)?;
+    /// Move the first complete message out of the internal buffer, if there
+    /// is one.
+    fn take_message(
+        &mut self,
+        params: &BgpSessionParams,
+        buf: &mut [u8],
+    ) -> Result<Option<(RawMessageType, usize)>, BgpSessionError> {
+        if self.rbuf.len() < BGP_HEADER_SIZE {
+            return Ok(None);
+        }
+        let header = &self.rbuf[..BGP_HEADER_SIZE];
 
-    if decoded_body_len > 0 {
-        if decoded_body_len > buf.len() {
+        // Validate marker (first 16 bytes must be 0xFF)
+        if header[..16] != [0xFF; 16] {
+            return Err(BgpSessionError::Protocol("invalid BGP marker".into()));
+        }
+
+        // Extract length (bytes 16-17, big-endian)
+        let msg_len = u16::from_be_bytes([header[16], header[17]]) as usize;
+        if !(BGP_HEADER_SIZE..=BGP_MAX_MSG_SIZE).contains(&msg_len) {
             return Err(BgpSessionError::Protocol(format!(
-                "message too large: {decoded_body_len} bytes"
+                "invalid message length: {msg_len}"
             )));
         }
-        stream.read_exact(&mut buf[..decoded_body_len]).await?;
-    }
 
-    Ok((RawMessageType::Standard(msg_type), decoded_body_len))
+        let body_len = msg_len - BGP_HEADER_SIZE;
+        if body_len > buf.len() {
+            return Err(BgpSessionError::Protocol(format!(
+                "message too large: {body_len} bytes"
+            )));
+        }
+
+        if self.rbuf.len() < msg_len {
+            return Ok(None);
+        }
+
+        let msg_type = if header[18] == MSG_TYPE_ROUTE_REFRESH {
+            // Route Refresh — handle ourselves
+            RawMessageType::RouteRefresh
+        } else {
+            // Standard message types (1-4) — use zettabgp's decode
+            let (msg_type, _) = params.decode_message_head(header)?;
+            RawMessageType::Standard(msg_type)
+        };
+
+        buf[..body_len].copy_from_slice(&self.rbuf[BGP_HEADER_SIZE..msg_len]);
+        self.rbuf.advance(msg_len);
+
+        Ok(Some((msg_type, body_len)))
+    }
 }
 
 /// Decode a Route Refresh message body (4 bytes: AFI u16, subtype u8, SAFI u8).

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 reflet-core = { workspace = true }
 tokio = { workspace = true }
+bytes = { workspace = true }
 zettabgp = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
