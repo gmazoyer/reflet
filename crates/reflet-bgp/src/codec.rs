@@ -5,7 +5,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use zettabgp::prelude::*;
 
-use crate::error::BgpSessionError;
+use crate::error::{BgpSessionError, MessageHeaderError};
 use crate::refresh::MSG_TYPE_ROUTE_REFRESH;
 
 /// BGP message header size (16 marker + 2 length + 1 type).
@@ -78,22 +78,19 @@ impl MessageReader {
 
         // Validate marker (first 16 bytes must be 0xFF)
         if header[..16] != [0xFF; 16] {
-            return Err(BgpSessionError::Protocol("invalid BGP marker".into()));
+            return Err(MessageHeaderError::ConnectionNotSynchronized.into());
         }
 
         // Extract length (bytes 16-17, big-endian)
-        let msg_len = u16::from_be_bytes([header[16], header[17]]) as usize;
+        let length = u16::from_be_bytes([header[16], header[17]]);
+        let msg_len = length as usize;
         if !(BGP_HEADER_SIZE..=BGP_MAX_MSG_SIZE).contains(&msg_len) {
-            return Err(BgpSessionError::Protocol(format!(
-                "invalid message length: {msg_len}"
-            )));
+            return Err(MessageHeaderError::BadMessageLength(length).into());
         }
 
         let body_len = msg_len - BGP_HEADER_SIZE;
         if body_len > buf.len() {
-            return Err(BgpSessionError::Protocol(format!(
-                "message too large: {body_len} bytes"
-            )));
+            return Err(MessageHeaderError::MessageTooLarge { length, body_len }.into());
         }
 
         if self.rbuf.len() < msg_len {
@@ -104,8 +101,14 @@ impl MessageReader {
             // Route Refresh — handle ourselves
             RawMessageType::RouteRefresh
         } else {
-            // Standard message types (1-4) — use zettabgp's decode
-            let (msg_type, _) = params.decode_message_head(header)?;
+            // Standard message types (1-4) — use zettabgp's decode. After the
+            // checks above, it can only fail on the type byte.
+            let (msg_type, _) = params.decode_message_head(header).map_err(|source| {
+                MessageHeaderError::BadMessageType {
+                    msg_type: header[18],
+                    source,
+                }
+            })?;
             RawMessageType::Standard(msg_type)
         };
 
@@ -191,17 +194,19 @@ pub async fn send_open(
     send_message(stream, params, BgpMessageType::Open, &open, buf).await
 }
 
-/// Send a NOTIFICATION message.
+/// Send a NOTIFICATION message. zettabgp always encodes `data` as two octets.
 pub async fn send_notification(
     stream: &mut TcpStream,
     params: &BgpSessionParams,
     error_code: u8,
     error_subcode: u8,
+    data: u16,
     buf: &mut [u8],
 ) -> Result<(), BgpSessionError> {
     let mut notif = BgpNotificationMessage::new();
     notif.error_code = error_code;
     notif.error_subcode = error_subcode;
+    notif.data = data;
     send_message(stream, params, BgpMessageType::Notification, &notif, buf).await
 }
 
@@ -275,5 +280,86 @@ mod tests {
     fn decode_route_refresh_too_short() {
         let buf = [0x00, 0x01, 0x00];
         assert!(decode_route_refresh(&buf, 3).is_err());
+    }
+
+    fn header(length: u16, msg_type: u8) -> Vec<u8> {
+        let mut msg = vec![0xFF; 16];
+        msg.extend_from_slice(&length.to_be_bytes());
+        msg.push(msg_type);
+        msg
+    }
+
+    #[test]
+    fn header_errors_map_to_notification_code_and_subcode() {
+        let params = BgpSessionParams::new(
+            65000,
+            90,
+            BgpTransportMode::IPv4,
+            std::net::Ipv4Addr::new(192, 0, 2, 1),
+            vec![],
+        );
+        let mut bad_marker = header(19, 4);
+        bad_marker[3] = 0;
+
+        // (received bytes, read buffer size, subcode, data, log text)
+        let cases = [
+            (
+                bad_marker,
+                BGP_MAX_MSG_SIZE,
+                1,
+                0,
+                "BGP protocol error: invalid BGP marker",
+            ),
+            (
+                header(18, 4),
+                BGP_MAX_MSG_SIZE,
+                2,
+                18,
+                "BGP protocol error: invalid message length: 18",
+            ),
+            (
+                header(4097, 2),
+                BGP_MAX_MSG_SIZE,
+                2,
+                4097,
+                "BGP protocol error: invalid message length: 4097",
+            ),
+            (
+                header(40, 2),
+                10,
+                2,
+                40,
+                "BGP protocol error: message too large: 21 bytes",
+            ),
+            (
+                header(19, 7),
+                BGP_MAX_MSG_SIZE,
+                3,
+                0x0700,
+                "BGP library error: BgpError Invalid message type",
+            ),
+        ];
+
+        for (bytes, buf_len, subcode, data, text) in cases {
+            let mut reader = MessageReader {
+                rbuf: BytesMut::from(&bytes[..]),
+            };
+            let mut buf = vec![0u8; buf_len];
+            let err = reader.take_message(&params, &mut buf).unwrap_err();
+            assert_eq!(err.to_string(), text);
+            let header_err = match err {
+                BgpSessionError::MessageHeader(e) => e,
+                other => panic!("expected a message header error, got {other}"),
+            };
+            assert_eq!(
+                (
+                    MessageHeaderError::CODE,
+                    header_err.subcode(),
+                    header_err.data()
+                ),
+                (1, subcode, data),
+                "{text}"
+            );
+        }
     }
 }

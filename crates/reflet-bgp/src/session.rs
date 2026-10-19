@@ -15,7 +15,7 @@ use reflet_core::prefix::AddressFamily;
 use reflet_core::rib::RibStore;
 
 use crate::codec::{self, BGP_MAX_MSG_SIZE, MessageReader, RawMessageType};
-use crate::error::BgpSessionError;
+use crate::error::{BgpSessionError, MessageHeaderError};
 use crate::graceful_restart::{self, PeerGrInfo};
 use crate::refresh::{
     AFI_IPV4, AFI_IPV6, CommandRx, ROUTE_REFRESH_BORR, ROUTE_REFRESH_EORR, ROUTE_REFRESH_NORMAL,
@@ -83,12 +83,13 @@ impl BgpSession {
         debug!(peer = %peer_id, "sent OPEN message");
 
         // Receive OPEN from peer (the reader handles type 5)
-        let (msg_type, msg_len) = timeout(
+        let read = timeout(
             Duration::from_secs(30),
             reader.read_message(&mut stream, &params, &mut buf),
         )
         .await
-        .map_err(|_| BgpSessionError::Protocol("timeout waiting for OPEN".into()))??;
+        .map_err(|_| BgpSessionError::Protocol("timeout waiting for OPEN".into()))?;
+        let (msg_type, msg_len) = notify_header_error(&mut stream, &params, read, &mut buf).await?;
 
         if msg_type != RawMessageType::Standard(BgpMessageType::Open) {
             return Err(BgpSessionError::Protocol(format!(
@@ -176,12 +177,14 @@ impl BgpSession {
         debug!(peer = %peer_id, "sent KEEPALIVE (confirming OPEN)");
 
         // Wait for peer's KEEPALIVE
-        let (msg_type, _msg_len) = timeout(
+        let read = timeout(
             Duration::from_secs(30),
             reader.read_message(&mut stream, &params, &mut buf),
         )
         .await
-        .map_err(|_| BgpSessionError::Protocol("timeout waiting for KEEPALIVE".into()))??;
+        .map_err(|_| BgpSessionError::Protocol("timeout waiting for KEEPALIVE".into()))?;
+        let (msg_type, _msg_len) =
+            notify_header_error(&mut stream, &params, read, &mut buf).await?;
 
         if msg_type != RawMessageType::Standard(BgpMessageType::Keepalive) {
             return Err(BgpSessionError::Protocol(format!(
@@ -259,7 +262,7 @@ impl BgpSession {
                     if *self.shutdown_rx.borrow() {
                         info!(peer = %peer_id, "shutdown signal received");
                         let _ = codec::send_notification(
-                            &mut stream, &params, 6, 2, &mut buf,
+                            &mut stream, &params, 6, 2, 0, &mut buf,
                         ).await;
                         return Err(BgpSessionError::Shutdown);
                     }
@@ -325,7 +328,7 @@ impl BgpSession {
                     if negotiated_hold > 0 && last_received.elapsed() > hold_timeout {
                         error!(peer = %peer_id, "hold timer expired");
                         let _ = codec::send_notification(
-                            &mut stream, &params, 4, 0, &mut buf,
+                            &mut stream, &params, 4, 0, 0, &mut buf,
                         ).await;
                         return Err(BgpSessionError::HoldTimerExpired);
                     }
@@ -335,7 +338,8 @@ impl BgpSession {
 
                 // Read incoming message
                 result = reader.read_message(&mut stream, &params, &mut buf) => {
-                    let (msg_type, msg_len) = result?;
+                    let (msg_type, msg_len) =
+                        notify_header_error(&mut stream, &params, result, &mut buf).await?;
                     last_received = Instant::now();
 
                     match msg_type {
@@ -390,7 +394,7 @@ impl BgpSession {
                         RawMessageType::Standard(BgpMessageType::Open) => {
                             warn!(peer = %peer_id, "received unexpected OPEN in Established state");
                             let _ = codec::send_notification(
-                                &mut stream, &params, 5, 0, &mut buf,
+                                &mut stream, &params, 5, 0, 0, &mut buf,
                             ).await;
                             return Err(BgpSessionError::Protocol(
                                 "unexpected OPEN in Established state".into()
@@ -498,4 +502,27 @@ impl BgpSession {
         info.state = state;
         debug!(peer = %info.id, state = %state, "state transition");
     }
+}
+
+/// Return the result of a read. If the read found a bad message header, first
+/// send a NOTIFICATION with code 1 (Message Header Error, RFC 4271 section
+/// 6.1), so that the peer logs the reason and not only a TCP reset.
+async fn notify_header_error(
+    stream: &mut TcpStream,
+    params: &BgpSessionParams,
+    read: Result<(RawMessageType, usize), BgpSessionError>,
+    buf: &mut [u8],
+) -> Result<(RawMessageType, usize), BgpSessionError> {
+    if let Err(BgpSessionError::MessageHeader(e)) = &read {
+        let _ = codec::send_notification(
+            stream,
+            params,
+            MessageHeaderError::CODE,
+            e.subcode(),
+            e.data(),
+            buf,
+        )
+        .await;
+    }
+    read
 }
