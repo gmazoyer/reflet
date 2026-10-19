@@ -242,16 +242,21 @@ async fn main() -> Result<()> {
     // Build HTTP router
     let app = build_router(state);
 
-    // Get the is_restarting flag and peers map before moving speaker
+    // Get the is_restarting flag and peers map for the restart timer
     let is_restarting_flag = speaker.is_restarting();
     let peers_for_timer = speaker.peers();
 
-    // Start BGP speaker in background
-    let bgp_handle = tokio::spawn(async move {
-        if let Err(e) = speaker.run().await {
-            tracing::error!(error = %e, "BGP speaker error");
-        }
-    });
+    // Start BGP speaker in background, and keep a handle to close its
+    // sessions on shutdown
+    let speaker = Arc::new(speaker);
+    let bgp_handle = {
+        let speaker = speaker.clone();
+        tokio::spawn(async move {
+            if let Err(e) = speaker.run().await {
+                tracing::error!(error = %e, "BGP speaker error");
+            }
+        })
+    };
 
     // Start global restart timer if we're in restart mode
     if is_restarting {
@@ -319,10 +324,9 @@ async fn main() -> Result<()> {
 
     info!("shutting down");
 
-    // Flush event log
-    event_log.flush();
-
-    // Save RIBs on graceful shutdown if GR is enabled
+    // Save RIBs on graceful shutdown if GR is enabled. Do this before the
+    // sessions close: the end of a session clears the routes of a peer
+    // without GR.
     if config.bgp.graceful_restart.enabled
         && let Some(ref data_dir) = config.bgp.graceful_restart.data_dir
     {
@@ -331,6 +335,11 @@ async fn main() -> Result<()> {
             Err(e) => tracing::warn!(error = %e, "failed to save RIBs"),
         }
     }
+
+    close_bgp_sessions(&speaker, std::time::Duration::from_secs(2)).await;
+
+    // Flush event log, after the session_down events of the closed sessions
+    event_log.flush();
 
     bgp_handle.abort();
     for handle in snapshot_handles {
@@ -428,6 +437,42 @@ fn init_logging(config: &reflet_core::config::LoggingConfig) {
         LogFormat::Pretty => {
             tracing_subscriber::fmt().with_env_filter(env_filter).init();
         }
+    }
+}
+
+/// Close the BGP sessions: each established session sends a Cease
+/// NOTIFICATION (Administrative Shutdown). Wait until no session is
+/// established, for at most `timeout`, so that the NOTIFICATIONs go out
+/// before the process exits.
+async fn close_bgp_sessions(speaker: &BgpSpeaker, timeout: std::time::Duration) {
+    speaker.shutdown();
+    let peers = speaker.peers();
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let established = peers
+            .read()
+            .map(|map| {
+                map.values()
+                    .filter(|info| {
+                        info.read()
+                            .map(|info| info.state == PeerState::Established)
+                            .unwrap_or(false)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        if established == 0 {
+            info!("closed BGP sessions");
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(
+                established,
+                "BGP sessions still established after shutdown timeout"
+            );
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 }
 

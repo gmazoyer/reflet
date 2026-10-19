@@ -224,8 +224,9 @@ Reflet handles `SIGINT` (Ctrl+C) / `SIGTERM` (Docker stop) gracefully:
 
 1. SSE streams are signaled to terminate
 2. Axum drains in-flight HTTP connections
-3. Event log is flushed to disk
-4. If Graceful Restart is enabled, RIBs are persisted to the configured `data_dir`
+3. If Graceful Restart is enabled, RIBs are persisted to the configured `data_dir`
+4. Each established BGP session sends a Cease NOTIFICATION (Administrative Shutdown) to its peer. Reflet waits at most 2 seconds for the sessions to close
+5. Event log is flushed to disk, including the session down events
 
 Docker's default stop timeout (10 seconds) is typically sufficient. Increase it if you have very large RIBs that take longer to persist:
 
