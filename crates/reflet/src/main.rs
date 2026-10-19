@@ -431,9 +431,30 @@ fn init_logging(config: &reflet_core::config::LoggingConfig) {
     }
 }
 
+/// Wait for SIGINT (Ctrl+C) or SIGTERM. `docker stop` and `systemctl stop`
+/// send SIGTERM. In a container, reflet is PID 1, and the kernel ignores
+/// SIGTERM for PID 1 when the process has no handler for it.
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install CTRL+C signal handler");
-    info!("received shutdown signal");
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install CTRL+C signal handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        signal(SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    let received = tokio::select! {
+        _ = ctrl_c => "SIGINT",
+        _ = terminate => "SIGTERM",
+    };
+    info!(signal = received, "received shutdown signal");
 }
