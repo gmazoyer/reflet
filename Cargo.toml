@@ -40,7 +40,7 @@ zettabgp = "0.3"
 
 # Networking / IP types
 ipnet = { version = "2", features = ["serde"] }
-prefix-trie = "0.8"
+prefix-trie = "0.10"
 
 # Concurrency
 dashmap = "6"

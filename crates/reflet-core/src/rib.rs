@@ -317,12 +317,12 @@ impl PeerRib {
     }
 
     /// Longest-prefix-match lookup for an IPv4 prefix.
-    pub fn lpm_v4(&self, prefix: &Ipv4Net) -> Option<(&Ipv4Net, &Vec<BgpRoute>)> {
+    pub fn lpm_v4(&self, prefix: &Ipv4Net) -> Option<(Ipv4Net, &Vec<BgpRoute>)> {
         self.ipv4.get_lpm(prefix)
     }
 
     /// Longest-prefix-match lookup for an IPv6 prefix.
-    pub fn lpm_v6(&self, prefix: &Ipv6Net) -> Option<(&Ipv6Net, &Vec<BgpRoute>)> {
+    pub fn lpm_v6(&self, prefix: &Ipv6Net) -> Option<(Ipv6Net, &Vec<BgpRoute>)> {
         self.ipv6.get_lpm(prefix)
     }
 
@@ -470,9 +470,7 @@ impl PeerRib {
         removed
     }
 
-    fn sweep_stale_trie<P: prefix_trie::Prefix + Copy>(
-        trie: &mut PrefixMap<P, Vec<BgpRoute>>,
-    ) -> usize {
+    fn sweep_stale_trie<P: prefix_trie::Prefix>(trie: &mut PrefixMap<P, Vec<BgpRoute>>) -> usize {
         let mut removed = 0;
         let mut empty_prefixes: Vec<P> = Vec::new();
 
@@ -481,7 +479,7 @@ impl PeerRib {
             routes.retain(|r| !r.stale);
             removed += before - routes.len();
             if routes.is_empty() {
-                empty_prefixes.push(*prefix);
+                empty_prefixes.push(prefix);
             }
         }
 
@@ -559,7 +557,7 @@ impl RibStore {
                 let rib_arc = self.get(peer_id)?;
                 let rib = rib_arc.read().ok()?;
                 let (matched_prefix, routes) = rib.lpm_v4(prefix)?;
-                Some((peer_id.clone(), *matched_prefix, routes.clone()))
+                Some((peer_id.clone(), matched_prefix, routes.clone()))
             })
             .collect()
     }
@@ -573,7 +571,7 @@ impl RibStore {
                 let rib_arc = self.get(peer_id)?;
                 let rib = rib_arc.read().ok()?;
                 let (matched_prefix, routes) = rib.lpm_v6(prefix)?;
-                Some((peer_id.clone(), *matched_prefix, routes.clone()))
+                Some((peer_id.clone(), matched_prefix, routes.clone()))
             })
             .collect()
     }
@@ -589,7 +587,7 @@ impl RibStore {
                 let routes: Vec<BgpRoute> = rib
                     .ipv4
                     .children(prefix)
-                    .filter(|(net, _)| *net != prefix)
+                    .filter(|(net, _)| net != prefix)
                     .flat_map(|(_, routes)| routes.iter().cloned())
                     .collect();
                 if routes.is_empty() {
@@ -612,7 +610,7 @@ impl RibStore {
                 let routes: Vec<BgpRoute> = rib
                     .ipv6
                     .children(prefix)
-                    .filter(|(net, _)| *net != prefix)
+                    .filter(|(net, _)| net != prefix)
                     .flat_map(|(_, routes)| routes.iter().cloned())
                     .collect();
                 if routes.is_empty() {
@@ -699,7 +697,7 @@ mod tests {
         let result = rib.lpm_v4(&lookup);
         assert!(result.is_some());
         let (matched, routes) = result.unwrap();
-        assert_eq!(*matched, "10.0.0.0/24".parse::<Ipv4Net>().unwrap());
+        assert_eq!(matched, "10.0.0.0/24".parse::<Ipv4Net>().unwrap());
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].next_hop, "10.0.0.2".parse::<IpAddr>().unwrap());
     }
