@@ -177,6 +177,11 @@ pub struct PeerConfig {
     pub location: Option<String>,
     #[serde(default = "default_families")]
     pub families: Vec<AddressFamily>,
+    /// Announce the Extended Next Hop Encoding capability (RFC 8950) for
+    /// IPv4 unicast, so that the peer can send IPv4 routes with an IPv6
+    /// next hop. Has no effect when `families` has no IPv4 unicast.
+    #[serde(default = "default_extended_next_hop")]
+    pub extended_next_hop: bool,
     /// Interval in seconds between RIB snapshots for this peer.
     /// Set to 0 or omit to disable snapshots.
     #[serde(default)]
@@ -225,6 +230,10 @@ fn default_hold_time() -> u16 {
 
 fn default_families() -> Vec<AddressFamily> {
     vec![AddressFamily::Ipv4Unicast, AddressFamily::Ipv6Unicast]
+}
+
+fn default_extended_next_hop() -> bool {
+    true
 }
 
 fn default_log_level() -> String {
@@ -452,6 +461,25 @@ name = "Router A"
 "#;
         let config = Config::from_toml(toml).unwrap();
         assert_eq!(config.peers[0].families.len(), 2);
+    }
+
+    #[test]
+    fn peer_extended_next_hop() {
+        let toml = r#"
+[[peers]]
+address = "10.0.0.2"
+remote_asn = 65001
+name = "Router A"
+
+[[peers]]
+address = "10.0.0.3"
+remote_asn = 65001
+name = "Router B"
+extended_next_hop = false
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert!(config.peers[0].extended_next_hop);
+        assert!(!config.peers[1].extended_next_hop);
     }
 
     #[test]

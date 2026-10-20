@@ -107,6 +107,7 @@ fn make_route_with_path_id(
         origin: Origin::Igp,
         as_path: vec![AsPathSegment::Sequence(as_path)],
         next_hop: next_hop.parse().unwrap(),
+        next_hop_link_local: None,
         med: None,
         local_pref: Some(100),
         communities: vec![],
@@ -246,6 +247,61 @@ async fn get_peer_routes_pagination() {
     assert_eq!(routes.len(), 1);
     assert_eq!(json["meta"]["total"], 2);
     assert_eq!(json["meta"]["per_page"], 1);
+}
+
+/// Add an IPv4 route with an IPv6 global and link-local next hop (RFC 8950)
+/// to peer A.
+fn test_state_with_ipv6_next_hop() -> AppState {
+    let state = test_state();
+    let rib_arc = state.rib_store.get_or_create("10.0.0.2");
+    let mut route = make_route("198.51.100.0/24", "2001:db8::1", vec![65001, 65040]);
+    route.next_hop_link_local = Some("fe80::1".parse().unwrap());
+    rib_arc.write().unwrap().insert(route);
+    state
+}
+
+#[tokio::test]
+async fn get_peer_routes_ipv6_next_hop_for_ipv4_route() {
+    let app = build_router(test_state_with_ipv6_next_hop());
+    let (status, body) = get(app, "/api/v1/peers/Router%20A/routes/ipv4").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let routes = json["data"].as_array().unwrap();
+    let route = routes
+        .iter()
+        .find(|r| r["prefix"] == "198.51.100.0/24")
+        .unwrap();
+    assert_eq!(route["next_hop"], "2001:db8::1");
+    assert_eq!(route["next_hop_link_local"], "fe80::1");
+
+    // Routes without a link-local next hop do not have the field.
+    let other = routes
+        .iter()
+        .find(|r| r["prefix"] == "10.0.0.0/24")
+        .unwrap();
+    assert!(other.get("next_hop_link_local").is_none());
+}
+
+#[tokio::test]
+async fn get_peer_routes_search_by_next_hop() {
+    for (search, expected) in [
+        ("nexthop:2001:db8::1", vec!["198.51.100.0/24"]),
+        ("nexthop:fe80::1", vec!["198.51.100.0/24"]),
+        ("nexthop:10.0.0.1", vec!["10.0.0.0/24", "192.168.1.0/24"]),
+    ] {
+        let app = build_router(test_state_with_ipv6_next_hop());
+        let uri = format!("/api/v1/peers/Router%20A/routes/ipv4?search={search}");
+        let (status, body) = get(app, &uri).await;
+        assert_eq!(status, StatusCode::OK, "{search}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let prefixes: Vec<&str> = json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["prefix"].as_str().unwrap())
+            .collect();
+        assert_eq!(prefixes, expected, "{search}");
+    }
 }
 
 #[tokio::test]
@@ -572,6 +628,7 @@ fn make_route_with_attrs(
         origin,
         as_path: vec![AsPathSegment::Sequence(as_path)],
         next_hop: next_hop.parse().unwrap(),
+        next_hop_link_local: None,
         med,
         local_pref,
         communities,

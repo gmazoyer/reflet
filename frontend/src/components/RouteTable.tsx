@@ -10,6 +10,7 @@ import type { AsnMap, BgpRoute, CommunityDefinitions } from "../api/types";
 import { formatOrigin } from "../utils/format";
 import AsPath from "./AsPath";
 import CommunityList from "./CommunityList";
+import NextHop from "./NextHop";
 import RpkiBadge from "./RpkiBadge";
 import Tooltip from "./Tooltip";
 
@@ -45,9 +46,7 @@ function buildColumns(communityDefinitions?: CommunityDefinitions, asnInfo?: Asn
       : []),
     columnHelper.accessor("next_hop", {
       header: "Next Hop",
-      cell: (info) => (
-        <span className="font-mono text-sm text-gray-600 dark:text-gray-400">{info.getValue()}</span>
-      ),
+      cell: (info) => <NextHop route={info.row.original} />,
     }),
     columnHelper.accessor("as_path", {
       header: "AS Path",

@@ -19,7 +19,9 @@ pub struct PaginationParams {
     /// ASN (`AS65001`), AS path subsequence (`65000 65001`), community
     /// (`community:65000:100`, wildcards with `*`), large community
     /// (`lc:65000:1:2`), origin (`origin:igp`), MED (`med:>100`, `med:<=200`),
-    /// and local-pref (`localpref:>=150`). Multiple filters are AND-combined.
+    /// local-pref (`localpref:>=150`), and next hop address or network,
+    /// global or link-local (`nexthop:2001:db8::1`, `nexthop:fe80::/10`).
+    /// Multiple filters are AND-combined.
     pub search: Option<String>,
 }
 

@@ -42,6 +42,7 @@ async fn bad_marker_gets_notification_before_close() {
         description: String::new(),
         location: None,
         families: vec![AddressFamily::Ipv4Unicast],
+        extended_next_hop: true,
         snapshot_interval: None,
     };
     let peer_info = Arc::new(RwLock::new(PeerInfo::new(
@@ -83,7 +84,7 @@ async fn bad_marker_gets_notification_before_close() {
     .unwrap()
     .unwrap();
     assert_eq!(msg_type, RawMessageType::Standard(BgpMessageType::Open));
-    codec::send_open(&mut peer, &peer_params, &mut buf)
+    codec::send_open(&mut peer, &peer_params, &[], &mut buf)
         .await
         .unwrap();
     let (msg_type, _) = timeout(

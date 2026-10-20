@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::RwLock;
 
 use chrono::Utc;
@@ -14,6 +14,8 @@ use reflet_core::route::{
     AsPathSegment, BgpRoute, Community, ExtCommunity, LargeCommunity, Origin,
 };
 
+use crate::nexthop::MpNextHop;
+
 /// The zettabgp transport mode for every session, IPv6 sessions included.
 ///
 /// zettabgp reads the classic UPDATE fields (withdrawn routes, NLRI,
@@ -26,8 +28,13 @@ pub const CLASSIC_FIELDS_MODE: BgpTransportMode = BgpTransportMode::IPv4;
 /// Process a decoded BGP UPDATE message and apply changes to the peer's RIB.
 ///
 /// Only processes routes for address families that are enabled via `has_ipv4` / `has_ipv6`.
+///
+/// `mp_next_hop` is the MP_REACH_NLRI next hop read from the raw message
+/// (see [`crate::nexthop`]). It replaces the next hop that zettabgp decodes.
+#[allow(clippy::too_many_arguments)]
 pub fn process_update(
     update: &BgpUpdateMessage,
+    mp_next_hop: Option<MpNextHop>,
     params: &BgpSessionParams,
     peer_id: &PeerId,
     rib: &RwLock<PeerRib>,
@@ -81,6 +88,7 @@ pub fn process_update(
     // Process MP_REACH_NLRI (may contain IPv4 or IPv6)
     let mp_announced = process_mp_reach(
         update,
+        mp_next_hop,
         params,
         peer_id,
         rib,
@@ -148,6 +156,7 @@ fn build_route(
     origin: &Origin,
     as_path: &[AsPathSegment],
     next_hop: IpAddr,
+    next_hop_link_local: Option<Ipv6Addr>,
     med: &Option<u32>,
     local_pref: &Option<u32>,
     communities: &[Community],
@@ -162,6 +171,7 @@ fn build_route(
         origin: *origin,
         as_path: as_path.to_vec(),
         next_hop,
+        next_hop_link_local,
         med: *med,
         local_pref: *local_pref,
         communities: communities.to_vec(),
@@ -204,6 +214,7 @@ fn process_ipv4_nlri(
                     origin,
                     as_path,
                     nh,
+                    None,
                     med,
                     local_pref,
                     communities,
@@ -235,6 +246,7 @@ fn process_ipv4_nlri(
                     origin,
                     as_path,
                     nh,
+                    None,
                     med,
                     local_pref,
                     communities,
@@ -264,6 +276,7 @@ fn process_ipv4_nlri(
 #[allow(clippy::too_many_arguments)]
 fn process_mp_reach(
     update: &BgpUpdateMessage,
+    mp_next_hop: Option<MpNextHop>,
     _params: &BgpSessionParams,
     peer_id: &PeerId,
     rib: &RwLock<PeerRib>,
@@ -282,7 +295,10 @@ fn process_mp_reach(
 ) -> usize {
     let mut count = 0;
     if let Some(mp_updates) = update.get_mpupdates() {
-        let next_hop = mp_nexthop_to_ipaddr(&mp_updates.nexthop);
+        let (next_hop, next_hop_link_local) = match mp_next_hop {
+            Some(nh) => (nh.address, nh.link_local),
+            None => (mp_nexthop_to_ipaddr(&mp_updates.nexthop), None),
+        };
         let flat_as_path = event_log::flatten_as_path(as_path);
 
         match &mp_updates.addrs {
@@ -296,6 +312,7 @@ fn process_mp_reach(
                         origin,
                         as_path,
                         next_hop,
+                        next_hop_link_local,
                         med,
                         local_pref,
                         communities,
@@ -327,6 +344,7 @@ fn process_mp_reach(
                         origin,
                         as_path,
                         next_hop,
+                        next_hop_link_local,
                         med,
                         local_pref,
                         communities,
@@ -358,6 +376,7 @@ fn process_mp_reach(
                         origin,
                         as_path,
                         next_hop,
+                        next_hop_link_local,
                         med,
                         local_pref,
                         communities,
@@ -389,6 +408,7 @@ fn process_mp_reach(
                         origin,
                         as_path,
                         next_hop,
+                        next_hop_link_local,
                         med,
                         local_pref,
                         communities,
@@ -635,8 +655,32 @@ mod tests {
         assert!(extract_as_path(&update).is_empty());
     }
 
-    /// Decode `body` with zettabgp, as the session does, and return the
-    /// routes stored for `prefix`.
+    fn v6(s: &str) -> [u8; 16] {
+        s.parse::<Ipv6Addr>().unwrap().octets()
+    }
+
+    /// Build an UPDATE body with ORIGIN and one MP_REACH_NLRI (SAFI unicast).
+    fn mp_reach_update_body(afi: u16, next_hop: &[u8], nlri: &[u8]) -> Vec<u8> {
+        let mut value = Vec::new();
+        value.extend_from_slice(&afi.to_be_bytes());
+        value.push(1);
+        value.push(next_hop.len() as u8);
+        value.extend_from_slice(next_hop);
+        value.push(0);
+        value.extend_from_slice(nlri);
+
+        let mut attrs = vec![0x40, 1, 1, 0]; // ORIGIN IGP
+        attrs.extend_from_slice(&[0x80, 14, value.len() as u8]);
+        attrs.extend_from_slice(&value);
+
+        let mut body = vec![0, 0];
+        body.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
+        body.extend_from_slice(&attrs);
+        body
+    }
+
+    /// Decode `body` with zettabgp and the raw next hop parser, as the
+    /// session does, and return the routes stored for `prefix`.
     fn process_raw_update(body: &[u8], prefix: &str) -> Vec<BgpRoute> {
         let params = BgpSessionParams::new(
             65000,
@@ -651,7 +695,16 @@ mod tests {
         let rib = RwLock::new(PeerRib::new());
         let event_log = EventLog::new(10, None).unwrap();
         let peer_id: PeerId = "2001:db8::ffff".to_string();
-        process_update(&update, &params, &peer_id, &rib, true, true, &event_log);
+        process_update(
+            &update,
+            crate::nexthop::parse_mp_reach_next_hop(body),
+            &params,
+            &peer_id,
+            &rib,
+            true,
+            true,
+            &event_log,
+        );
 
         let rib = rib.read().unwrap();
         rib.get(&prefix.parse().unwrap()).unwrap().clone()
@@ -678,5 +731,34 @@ mod tests {
             );
             assert_eq!(routes[0].as_path_flat(), vec![65001]);
         }
+    }
+
+    #[test]
+    fn ipv4_route_with_ipv6_next_hop() {
+        let next_hop = [v6("2001:db8::1"), v6("fe80::1")].concat();
+        let body = mp_reach_update_body(1, &next_hop, &[24, 192, 0, 2]);
+        let routes = process_raw_update(&body, "192.0.2.0/24");
+        assert_eq!(routes[0].next_hop, "2001:db8::1".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            routes[0].next_hop_link_local,
+            Some("fe80::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn ipv4_route_with_ipv6_link_local_next_hop() {
+        let body = mp_reach_update_body(1, &v6("fe80::1"), &[24, 192, 0, 2]);
+        let routes = process_raw_update(&body, "192.0.2.0/24");
+        assert_eq!(routes[0].next_hop, "fe80::1".parse::<IpAddr>().unwrap());
+        assert_eq!(routes[0].next_hop_link_local, None);
+    }
+
+    #[test]
+    fn ipv6_route_with_link_local_only_next_hop() {
+        let next_hop = [v6("::"), v6("fe80::1")].concat();
+        let body = mp_reach_update_body(2, &next_hop, &[32, 0x20, 0x01, 0x0d, 0xb8]);
+        let routes = process_raw_update(&body, "2001:db8::/32");
+        assert_eq!(routes[0].next_hop, "fe80::1".parse::<IpAddr>().unwrap());
+        assert_eq!(routes[0].next_hop_link_local, None);
     }
 }

@@ -17,6 +17,7 @@ use reflet_core::rib::RibStore;
 use crate::codec::{self, BGP_MAX_MSG_SIZE, MessageReader, RawMessageType};
 use crate::error::{BgpSessionError, MessageHeaderError};
 use crate::graceful_restart::{self, PeerGrInfo};
+use crate::nexthop;
 use crate::refresh::{
     AFI_IPV4, AFI_IPV6, CommandRx, ROUTE_REFRESH_BORR, ROUTE_REFRESH_EORR, ROUTE_REFRESH_NORMAL,
     RouteRefreshState, SAFI_UNICAST,
@@ -78,7 +79,7 @@ impl BgpSession {
         self.set_state(PeerState::Connect);
 
         // Send OPEN
-        codec::send_open(&mut stream, &params, &mut buf).await?;
+        codec::send_open(&mut stream, &params, &self.open_extra_params(), &mut buf).await?;
         self.set_state(PeerState::OpenSent);
         debug!(peer = %peer_id, "sent OPEN message");
 
@@ -361,7 +362,9 @@ impl BgpSession {
                             // Normal decode + process (EoR messages decode as empty updates)
                             let mut update_msg = BgpUpdateMessage::new();
                             update_msg.decode_from(&params, &buf[..msg_len])?;
-                            update::process_update(&update_msg, &params, &peer_id, &rib_arc, has_ipv4, has_ipv6, &self.event_log);
+                            // zettabgp decodes some MP_REACH_NLRI next hops wrongly
+                            let mp_next_hop = nexthop::parse_mp_reach_next_hop(&buf[..msg_len]);
+                            update::process_update(&update_msg, mp_next_hop, &params, &peer_id, &rib_arc, has_ipv4, has_ipv6, &self.event_log);
 
                             // Update prefix counts
                             if let Ok(rib) = rib_arc.read() {
@@ -495,6 +498,20 @@ impl BgpSession {
 
     fn peer_id(&self) -> PeerId {
         format!("{}", self.peer_config.address)
+    }
+
+    /// OPEN optional parameters that zettabgp cannot encode.
+    fn open_extra_params(&self) -> Vec<u8> {
+        let mut extra = Vec::new();
+        if self.peer_config.extended_next_hop
+            && self
+                .peer_config
+                .families
+                .contains(&AddressFamily::Ipv4Unicast)
+        {
+            extra.extend_from_slice(&nexthop::extended_next_hop_param());
+        }
+        extra
     }
 
     fn set_state(&self, state: PeerState) {

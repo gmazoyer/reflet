@@ -1,5 +1,5 @@
 use std::fmt;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,11 @@ pub struct BgpRoute {
     pub as_path: Vec<AsPathSegment>,
     #[schema(value_type = String, example = "10.0.0.1")]
     pub next_hop: IpAddr,
+    /// IPv6 link-local next hop that follows a global next hop in
+    /// MP_REACH_NLRI (RFC 2545, RFC 8950).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, examples("fe80::1"))]
+    pub next_hop_link_local: Option<Ipv6Addr>,
     pub med: Option<u32>,
     pub local_pref: Option<u32>,
     pub communities: Vec<Community>,
@@ -198,6 +203,7 @@ mod tests {
                 AsPathSegment::Set(vec![65002, 65003]),
             ],
             next_hop: "10.0.0.1".parse().unwrap(),
+            next_hop_link_local: None,
             med: None,
             local_pref: None,
             communities: vec![],

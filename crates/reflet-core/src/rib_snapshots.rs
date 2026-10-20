@@ -293,6 +293,7 @@ mod tests {
             origin: Origin::Igp,
             as_path: vec![AsPathSegment::Sequence(as_path)],
             next_hop: next_hop.parse().unwrap(),
+            next_hop_link_local: None,
             med: None,
             local_pref: Some(100),
             communities: vec![],

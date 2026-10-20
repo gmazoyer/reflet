@@ -39,6 +39,7 @@ name = "Router A"               # short label shown in UI, metrics, and lookup r
 description = "Primary border router in Amsterdam DC1"  # longer text shown in peer list
 location = "DC1, Amsterdam"     # optional: city, datacenter, etc.
 families = ["ipv4-unicast", "ipv6-unicast"]
+# extended_next_hop = false     # do not accept IPv4 routes with an IPv6 next hop (RFC 8950)
 # snapshot_interval = 3600      # take a RIB snapshot every hour (requires [snapshots])
 
 [[peers]]

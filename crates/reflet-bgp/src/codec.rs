@@ -185,13 +185,48 @@ pub async fn send_keepalive(
 }
 
 /// Send an OPEN message.
+///
+/// `extra_params` holds encoded optional parameters that zettabgp cannot
+/// encode, such as the Extended Next Hop capability. They go after the
+/// capabilities from `params`.
 pub async fn send_open(
     stream: &mut TcpStream,
     params: &BgpSessionParams,
+    extra_params: &[u8],
     buf: &mut [u8],
 ) -> Result<(), BgpSessionError> {
+    let total_len = encode_open(params, extra_params, buf)?;
+    stream.write_all(&buf[..total_len]).await?;
+    Ok(())
+}
+
+/// Offset of the Optional Parameters Length field in an OPEN body.
+const OPEN_OPT_PARAMS_LEN_OFFSET: usize = 9;
+
+/// Encode an OPEN message with `extra_params` after the zettabgp
+/// capabilities. Returns the length of the full message in `buf`.
+fn encode_open(
+    params: &BgpSessionParams,
+    extra_params: &[u8],
+    buf: &mut [u8],
+) -> Result<usize, BgpSessionError> {
     let open = params.open_message();
-    send_message(stream, params, BgpMessageType::Open, &open, buf).await
+    let body = &mut buf[BGP_HEADER_SIZE..];
+    let mut body_len = open.encode_to(params, body)?;
+
+    if !extra_params.is_empty() {
+        let opt_params_len = body[OPEN_OPT_PARAMS_LEN_OFFSET] as usize + extra_params.len();
+        let opt_params_len = u8::try_from(opt_params_len).map_err(|_| {
+            BgpSessionError::Protocol(format!(
+                "OPEN optional parameters too long: {opt_params_len} bytes"
+            ))
+        })?;
+        body[OPEN_OPT_PARAMS_LEN_OFFSET] = opt_params_len;
+        body[body_len..body_len + extra_params.len()].copy_from_slice(extra_params);
+        body_len += extra_params.len();
+    }
+
+    Ok(params.prepare_message_buf(buf, BgpMessageType::Open, body_len)?)
 }
 
 /// Send a NOTIFICATION message. zettabgp always encodes `data` as two octets.
@@ -256,6 +291,70 @@ mod tests {
 
         assert_eq!(u16::from_be_bytes([buf[19], buf[20]]), AFI_IPV6);
         assert_eq!(buf[21], ROUTE_REFRESH_BORR);
+    }
+
+    fn open_params() -> BgpSessionParams {
+        BgpSessionParams::new(
+            65000,
+            90,
+            BgpTransportMode::IPv6,
+            std::net::Ipv4Addr::new(192, 0, 2, 1),
+            vec![
+                BgpCapability::SafiIPv4u,
+                BgpCapability::SafiIPv6u,
+                BgpCapability::CapRR,
+                BgpCapability::CapASN32(65000),
+            ],
+        )
+    }
+
+    #[test]
+    fn encode_open_without_extra_params() {
+        let params = open_params();
+        let mut buf = [0u8; BGP_MAX_MSG_SIZE];
+        let total_len = encode_open(&params, &[], &mut buf).unwrap();
+
+        let mut open = BgpOpenMessage::new();
+        open.decode_from(&params, &buf[BGP_HEADER_SIZE..total_len])
+            .unwrap();
+        assert_eq!(open.caps, params.caps);
+    }
+
+    #[test]
+    fn encode_open_appends_extra_params() {
+        let params = open_params();
+        let mut plain = [0u8; BGP_MAX_MSG_SIZE];
+        let plain_len = encode_open(&params, &[], &mut plain).unwrap();
+
+        let extra = crate::nexthop::extended_next_hop_param();
+        let mut buf = [0u8; BGP_MAX_MSG_SIZE];
+        let total_len = encode_open(&params, &extra, &mut buf).unwrap();
+
+        assert_eq!(total_len, plain_len + extra.len());
+        assert_eq!(u16::from_be_bytes([buf[16], buf[17]]) as usize, total_len);
+        let opt_params_len = BGP_HEADER_SIZE + OPEN_OPT_PARAMS_LEN_OFFSET;
+        assert_eq!(
+            buf[opt_params_len] as usize,
+            plain[opt_params_len] as usize + extra.len()
+        );
+        assert_eq!(&buf[plain_len..total_len], &extra);
+
+        // zettabgp skips the unknown capability and still decodes the others.
+        let mut open = BgpOpenMessage::new();
+        open.decode_from(&params, &buf[BGP_HEADER_SIZE..total_len])
+            .unwrap();
+        assert_eq!(open.caps, params.caps);
+    }
+
+    #[test]
+    fn encode_open_rejects_too_long_optional_params() {
+        let params = open_params();
+        let mut buf = [0u8; BGP_MAX_MSG_SIZE];
+        let extra = [0u8; 255];
+        assert!(matches!(
+            encode_open(&params, &extra, &mut buf),
+            Err(BgpSessionError::Protocol(_))
+        ));
     }
 
     #[test]

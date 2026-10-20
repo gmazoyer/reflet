@@ -1,7 +1,8 @@
+use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
-use ipnet::{Ipv4Net, Ipv6Net};
+use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use prefix_trie::PrefixMap;
 use rayon::prelude::*;
 
@@ -71,10 +72,20 @@ enum SearchFilter<'a> {
     Med(NumericComparison),
     /// Match routes by local-pref with comparison (e.g. "localpref:>=200").
     LocalPref(NumericComparison),
+    /// Match routes whose next hop or link-local next hop is in this network
+    /// (e.g. "nexthop:2001:db8::1", "nexthop:fe80::/10").
+    NextHop(IpNet),
 }
 
 /// Known structured filter keywords (lowercase).
-const STRUCTURED_KEYWORDS: &[&str] = &["community:", "lc:", "origin:", "med:", "localpref:"];
+const STRUCTURED_KEYWORDS: &[&str] = &[
+    "community:",
+    "lc:",
+    "origin:",
+    "med:",
+    "localpref:",
+    "nexthop:",
+];
 
 /// Try to parse a single token as a structured `key:value` filter.
 /// Returns `None` if the token doesn't start with a known keyword or parsing fails.
@@ -144,13 +155,21 @@ fn parse_structured_token(token: &str) -> Option<SearchFilter<'_>> {
         return parse_numeric_comparison(val).map(SearchFilter::LocalPref);
     }
 
+    if let Some(val) = lower.strip_prefix("nexthop:") {
+        let net = match val.parse::<IpNet>() {
+            Ok(net) => net,
+            Err(_) => IpNet::from(val.parse::<IpAddr>().ok()?),
+        };
+        return Some(SearchFilter::NextHop(net));
+    }
+
     None
 }
 
 /// Parse a search string into a list of filters (AND semantics).
 ///
 /// Tokens starting with a known keyword (`community:`, `lc:`, `origin:`, `med:`,
-/// `localpref:`) are parsed as structured filters. Remaining tokens are rejoined
+/// `localpref:`, `nexthop:`) are parsed as structured filters. Remaining tokens are rejoined
 /// and parsed with the legacy heuristic (ASN → AS path → prefix fallback).
 /// If a structured token fails to parse, it falls back to the remainder.
 fn parse_search(input: &str) -> Vec<SearchFilter<'_>> {
@@ -421,6 +440,12 @@ impl PeerRib {
                             SearchFilter::LocalPref(cmp) => {
                                 route.local_pref.is_some_and(|lp| cmp.matches(lp))
                             }
+                            SearchFilter::NextHop(net) => {
+                                net.contains(&route.next_hop)
+                                    || route
+                                        .next_hop_link_local
+                                        .is_some_and(|ll| net.contains(&IpAddr::V6(ll)))
+                            }
                         })
                     })
                 })
@@ -650,6 +675,7 @@ mod tests {
             origin: Origin::Igp,
             as_path: vec![AsPathSegment::Sequence(as_path)],
             next_hop: next_hop.parse().unwrap(),
+            next_hop_link_local: None,
             med: None,
             local_pref: Some(100),
             communities: vec![],
@@ -1129,6 +1155,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_search_nexthop() {
+        let filters = parse_search("nexthop:2001:DB8::1");
+        assert_eq!(filters.len(), 1);
+        match &filters[0] {
+            SearchFilter::NextHop(net) => {
+                assert_eq!(*net, "2001:db8::1/128".parse::<IpNet>().unwrap())
+            }
+            _ => panic!("expected NextHop variant"),
+        }
+
+        let filters = parse_search("nexthop:10.0.0.0/8");
+        match &filters[0] {
+            SearchFilter::NextHop(net) => {
+                assert_eq!(*net, "10.0.0.0/8".parse::<IpNet>().unwrap())
+            }
+            _ => panic!("expected NextHop variant"),
+        }
+    }
+
+    #[test]
+    fn parse_search_nexthop_invalid_falls_back_to_prefix() {
+        let filters = parse_search("nexthop:router1");
+        assert_eq!(filters.len(), 1);
+        assert!(matches!(
+            filters[0],
+            SearchFilter::Prefix("nexthop:router1")
+        ));
+    }
+
+    #[test]
     fn parse_search_multiple_filters_combined() {
         let filters = parse_search("community:65000:100 origin:igp");
         assert_eq!(filters.len(), 2);
@@ -1274,6 +1330,7 @@ mod tests {
             origin,
             as_path: vec![AsPathSegment::Sequence(as_path)],
             next_hop: next_hop.parse().unwrap(),
+            next_hop_link_local: None,
             med,
             local_pref,
             communities,
@@ -1442,6 +1499,33 @@ mod tests {
         let (data, total) = rib.paginate_ipv4(1, 100, Some("localpref:>=200"));
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.1.0/24");
+    }
+
+    #[test]
+    fn paginate_filter_by_nexthop() {
+        let mut rib = PeerRib::new();
+        rib.insert(make_route("10.0.0.0/24", "10.0.0.1", vec![65000]));
+        // IPv4 route with an IPv6 next hop (RFC 8950)
+        rib.insert(make_route("10.0.1.0/24", "2001:db8::1", vec![65000]));
+        let mut route = make_route("10.0.2.0/24", "2001:db8::2", vec![65000]);
+        route.next_hop_link_local = Some("fe80::2".parse().unwrap());
+        rib.insert(route);
+
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("nexthop:10.0.0.1"));
+        assert_eq!(total, 1);
+        assert_eq!(data[0].prefix.to_string(), "10.0.0.0/24");
+
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("nexthop:2001:db8::1"));
+        assert_eq!(total, 1);
+        assert_eq!(data[0].prefix.to_string(), "10.0.1.0/24");
+
+        let (_, total) = rib.paginate_ipv4(1, 100, Some("nexthop:2001:db8::/32"));
+        assert_eq!(total, 2);
+
+        // The link-local next hop matches too
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("nexthop:fe80::/10"));
+        assert_eq!(total, 1);
+        assert_eq!(data[0].prefix.to_string(), "10.0.2.0/24");
     }
 
     #[test]
