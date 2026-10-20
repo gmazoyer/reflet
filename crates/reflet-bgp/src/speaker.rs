@@ -17,6 +17,7 @@ use reflet_core::rib::RibStore;
 use crate::graceful_restart::PeerGrInfo;
 use crate::refresh::CommandTx;
 use crate::session::BgpSession;
+use crate::update;
 
 /// The BGP speaker: listens for connections and manages per-peer sessions.
 pub struct BgpSpeaker {
@@ -312,11 +313,6 @@ impl BgpSpeaker {
     }
 
     fn build_session_params(&self, peer_config: &PeerConfig) -> BgpSessionParams {
-        let peer_mode = match peer_config.address {
-            std::net::IpAddr::V4(_) => BgpTransportMode::IPv4,
-            std::net::IpAddr::V6(_) => BgpTransportMode::IPv6,
-        };
-
         let mut caps = Vec::new();
 
         for family in &peer_config.families {
@@ -382,7 +378,7 @@ impl BgpSpeaker {
         BgpSessionParams::new(
             self.bgp_config.local_asn,
             self.bgp_config.hold_time,
-            peer_mode,
+            update::CLASSIC_FIELDS_MODE,
             self.bgp_config.router_id,
             caps,
         )

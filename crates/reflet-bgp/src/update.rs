@@ -14,6 +14,15 @@ use reflet_core::route::{
     AsPathSegment, BgpRoute, Community, ExtCommunity, LargeCommunity, Origin,
 };
 
+/// The zettabgp transport mode for every session, IPv6 sessions included.
+///
+/// zettabgp reads the classic UPDATE fields (withdrawn routes, NLRI,
+/// NEXT_HOP, CLUSTER_LIST) in the format of this mode. RFC 4271 and
+/// RFC 4456 define these fields as IPv4 on every transport. In IPv6 mode,
+/// zettabgp rejects a 4-byte NEXT_HOP and the session resets. IPv6 routes
+/// come in MP_REACH_NLRI and MP_UNREACH_NLRI, which do not use this mode.
+pub const CLASSIC_FIELDS_MODE: BgpTransportMode = BgpTransportMode::IPv4;
+
 /// Process a decoded BGP UPDATE message and apply changes to the peer's RIB.
 ///
 /// Only processes routes for address families that are enabled via `has_ipv4` / `has_ipv6`.
@@ -624,5 +633,50 @@ mod tests {
     fn test_as_path_extraction_empty() {
         let update = BgpUpdateMessage::new();
         assert!(extract_as_path(&update).is_empty());
+    }
+
+    /// Decode `body` with zettabgp, as the session does, and return the
+    /// routes stored for `prefix`.
+    fn process_raw_update(body: &[u8], prefix: &str) -> Vec<BgpRoute> {
+        let params = BgpSessionParams::new(
+            65000,
+            90,
+            CLASSIC_FIELDS_MODE,
+            std::net::Ipv4Addr::new(192, 0, 2, 1),
+            vec![],
+        );
+        let mut update = BgpUpdateMessage::new();
+        update.decode_from(&params, body).unwrap();
+
+        let rib = RwLock::new(PeerRib::new());
+        let event_log = EventLog::new(10, None).unwrap();
+        let peer_id: PeerId = "2001:db8::ffff".to_string();
+        process_update(&update, &params, &peer_id, &rib, true, true, &event_log);
+
+        let rib = rib.read().unwrap();
+        rib.get(&prefix.parse().unwrap()).unwrap().clone()
+    }
+
+    /// IPv4 routes with a classic 4-byte NEXT_HOP, as BIRD sends them over
+    /// an IPv6 session when extended next hop is not negotiated.
+    #[test]
+    fn classic_ipv4_routes_over_ipv6_session() {
+        let body = [
+            0, 0, // no withdrawn routes
+            0, 20, // path attributes length
+            0x40, 1, 1, 0, // ORIGIN IGP
+            0x40, 2, 6, 2, 1, 0, 0, 0xfd, 0xe9, // AS_PATH 65001
+            0x40, 3, 4, 172, 30, 42, 20, // NEXT_HOP 172.30.42.20
+            24, 198, 51, 100, // 198.51.100.0/24
+            24, 203, 0, 113, // 203.0.113.0/24
+        ];
+        for prefix in ["198.51.100.0/24", "203.0.113.0/24"] {
+            let routes = process_raw_update(&body, prefix);
+            assert_eq!(
+                routes[0].next_hop,
+                "172.30.42.20".parse::<IpAddr>().unwrap()
+            );
+            assert_eq!(routes[0].as_path_flat(), vec![65001]);
+        }
     }
 }
