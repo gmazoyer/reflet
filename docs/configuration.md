@@ -25,7 +25,7 @@ Controls the HTTP API and BGP listening sockets, the web UI title, and privacy s
 | `listen` | socket address | `0.0.0.0:8080` | Address and port for the REST API and web UI. |
 | `bgp_listen` | socket address | `0.0.0.0:179` | Address and port for incoming BGP connections. Port 179 requires root or `CAP_NET_BIND_SERVICE`. |
 | `title` | string | `"Reflet"` | Display title shown in the web UI header. |
-| `hide_peer_addresses` | boolean | `false` | When `true`, peer IP addresses, router IDs, and next-hop addresses are hidden from API responses. |
+| `hide_peer_addresses` | boolean | `false` | When `true`, the API hides peer IP addresses, router IDs, and link-local next hops (fe80::/10). On a session over link-local addresses, the link-local next hop is the peer address. Other next hops stay visible, and a `nexthop:` search does not match a hidden next hop. |
 | `disable_route_refresh` | boolean | `false` | When `true`, the route refresh API returns 403 and the UI button is hidden. Useful for public instances to prevent abuse. |
 
 ```toml
@@ -83,6 +83,7 @@ An array of BGP peer configurations. Each `[[peers]]` entry defines one BGP sess
 | `description` | string | `""` | Longer description shown in the peer list. |
 | `location` | string | *(none)* | Free-text location (city, datacenter, etc.) displayed alongside the peer. |
 | `families` | list of strings | `["ipv4-unicast", "ipv6-unicast"]` | Address families to negotiate. Valid values: `ipv4-unicast`, `ipv6-unicast`. |
+| `extended_next_hop` | boolean | `false` | Announce the Extended Next Hop Encoding capability (RFC 8950) for IPv4 unicast. The peer can then send IPv4 routes with an IPv6 next hop. RFC 8950 does not let a peer send these routes without the capability, but Reflet accepts them when a peer does. Has no effect when `families` does not include `ipv4-unicast`. |
 | `snapshot_interval` | integer (u64) | *(none)* | Seconds between RIB snapshots for this peer. Set to `0` or omit to disable. Minimum `60`. Requires a `[snapshots]` section. |
 
 ```toml

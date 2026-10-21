@@ -10,7 +10,7 @@
 listen = "0.0.0.0:8080"        # REST API listen address
 bgp_listen = "0.0.0.0:179"     # BGP listen address
 # title = "Reflet"             # display title shown in the web UI header (default: "Reflet")
-# hide_peer_addresses = true   # hide peer IPs, router IDs, and next-hops from API responses
+# hide_peer_addresses = true   # hide peer IPs, router IDs, and link-local next hops from API responses
 # disable_route_refresh = true # disable the route refresh button/API (for public instances)
 
 [bgp]
@@ -39,6 +39,7 @@ name = "Router A"               # short label shown in UI, metrics, and lookup r
 description = "Primary border router in Amsterdam DC1"  # longer text shown in peer list
 location = "DC1, Amsterdam"     # optional: city, datacenter, etc.
 families = ["ipv4-unicast", "ipv6-unicast"]
+# extended_next_hop = true      # let the peer send IPv4 routes with an IPv6 next hop (RFC 8950)
 # snapshot_interval = 3600      # take a RIB snapshot every hour (requires [snapshots])
 
 [[peers]]

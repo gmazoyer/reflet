@@ -5,6 +5,7 @@ import { formatOrigin } from "../utils/format";
 import AsPath from "../components/AsPath";
 import AsPathGraph from "../components/AsPathGraph";
 import CommunityList from "../components/CommunityList";
+import NextHop from "../components/NextHop";
 import PrefixSearch from "../components/PrefixSearch";
 import RpkiBadge from "../components/RpkiBadge";
 import ToggleGroup from "../components/ToggleGroup";
@@ -160,8 +161,8 @@ export default function Lookup() {
                             <RpkiBadge status={row.route.rpki_status} />
                           </td>
                         )}
-                        <td className="px-4 py-3 text-sm font-mono text-gray-600 dark:text-gray-400">
-                          {row.route.next_hop}
+                        <td className="px-4 py-3">
+                          <NextHop route={row.route} showDetails />
                         </td>
                         <td className="px-4 py-3">
                           <AsPath segments={row.route.as_path} asnInfo={asnInfo} />

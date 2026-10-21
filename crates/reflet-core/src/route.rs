@@ -1,5 +1,5 @@
 use std::fmt;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,11 @@ pub struct BgpRoute {
     pub as_path: Vec<AsPathSegment>,
     #[schema(value_type = String, example = "10.0.0.1")]
     pub next_hop: IpAddr,
+    /// IPv6 link-local next hop that follows a global next hop in
+    /// MP_REACH_NLRI (RFC 2545, RFC 8950).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, examples("fe80::1"))]
+    pub next_hop_link_local: Option<Ipv6Addr>,
     pub med: Option<u32>,
     pub local_pref: Option<u32>,
     pub communities: Vec<Community>,
@@ -119,6 +124,32 @@ impl BgpRoute {
     }
 }
 
+/// Returns true for an IPv6 link-local unicast address (fe80::/10).
+pub fn is_link_local(addr: &IpAddr) -> bool {
+    matches!(addr, IpAddr::V6(v6) if v6.is_unicast_link_local())
+}
+
+/// Replace a link-local address with `::`, for `hide_peer_addresses`. On a
+/// session over link-local addresses, the link-local next hop of a route is
+/// the address of the peer.
+pub fn mask_link_local(addr: IpAddr) -> IpAddr {
+    if is_link_local(&addr) {
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+    } else {
+        addr
+    }
+}
+
+impl BgpRoute {
+    /// Replace the link-local next hops with `::` (see [`mask_link_local`]).
+    pub fn mask_link_local_next_hops(&mut self) {
+        self.next_hop = mask_link_local(self.next_hop);
+        if self.next_hop_link_local.is_some() {
+            self.next_hop_link_local = Some(Ipv6Addr::UNSPECIFIED);
+        }
+    }
+}
+
 impl fmt::Display for Community {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.asn, self.value)
@@ -167,6 +198,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mask_link_local_addresses() {
+        for (addr, masked) in [
+            ("fe80::2", "::"),
+            ("febf::1", "::"),
+            ("fec0::1", "fec0::1"),
+            ("2001:db8::1", "2001:db8::1"),
+            ("192.0.2.1", "192.0.2.1"),
+        ] {
+            assert_eq!(
+                mask_link_local(addr.parse().unwrap()),
+                masked.parse::<IpAddr>().unwrap(),
+                "{addr}"
+            );
+        }
+    }
+
+    #[test]
     fn derive_origin_as_from_sequence() {
         let path = vec![AsPathSegment::Sequence(vec![65000, 65001, 65002])];
         assert_eq!(BgpRoute::derive_origin_as(&path), Some(65002));
@@ -198,6 +246,7 @@ mod tests {
                 AsPathSegment::Set(vec![65002, 65003]),
             ],
             next_hop: "10.0.0.1".parse().unwrap(),
+            next_hop_link_local: None,
             med: None,
             local_pref: None,
             communities: vec![],

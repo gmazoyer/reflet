@@ -107,6 +107,7 @@ fn make_route_with_path_id(
         origin: Origin::Igp,
         as_path: vec![AsPathSegment::Sequence(as_path)],
         next_hop: next_hop.parse().unwrap(),
+        next_hop_link_local: None,
         med: None,
         local_pref: Some(100),
         communities: vec![],
@@ -246,6 +247,61 @@ async fn get_peer_routes_pagination() {
     assert_eq!(routes.len(), 1);
     assert_eq!(json["meta"]["total"], 2);
     assert_eq!(json["meta"]["per_page"], 1);
+}
+
+/// Add an IPv4 route with an IPv6 global and link-local next hop (RFC 8950)
+/// to peer A.
+fn test_state_with_ipv6_next_hop() -> AppState {
+    let state = test_state();
+    let rib_arc = state.rib_store.get_or_create("10.0.0.2");
+    let mut route = make_route("198.51.100.0/24", "2001:db8::1", vec![65001, 65040]);
+    route.next_hop_link_local = Some("fe80::1".parse().unwrap());
+    rib_arc.write().unwrap().insert(route);
+    state
+}
+
+#[tokio::test]
+async fn get_peer_routes_ipv6_next_hop_for_ipv4_route() {
+    let app = build_router(test_state_with_ipv6_next_hop());
+    let (status, body) = get(app, "/api/v1/peers/Router%20A/routes/ipv4").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let routes = json["data"].as_array().unwrap();
+    let route = routes
+        .iter()
+        .find(|r| r["prefix"] == "198.51.100.0/24")
+        .unwrap();
+    assert_eq!(route["next_hop"], "2001:db8::1");
+    assert_eq!(route["next_hop_link_local"], "fe80::1");
+
+    // Routes without a link-local next hop do not have the field.
+    let other = routes
+        .iter()
+        .find(|r| r["prefix"] == "10.0.0.0/24")
+        .unwrap();
+    assert!(other.get("next_hop_link_local").is_none());
+}
+
+#[tokio::test]
+async fn get_peer_routes_search_by_next_hop() {
+    for (search, expected) in [
+        ("nexthop:2001:db8::1", vec!["198.51.100.0/24"]),
+        ("nexthop:fe80::1", vec!["198.51.100.0/24"]),
+        ("nexthop:10.0.0.1", vec!["10.0.0.0/24", "192.168.1.0/24"]),
+    ] {
+        let app = build_router(test_state_with_ipv6_next_hop());
+        let uri = format!("/api/v1/peers/Router%20A/routes/ipv4?search={search}");
+        let (status, body) = get(app, &uri).await;
+        assert_eq!(status, StatusCode::OK, "{search}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let prefixes: Vec<&str> = json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["prefix"].as_str().unwrap())
+            .collect();
+        assert_eq!(prefixes, expected, "{search}");
+    }
 }
 
 #[tokio::test]
@@ -572,6 +628,7 @@ fn make_route_with_attrs(
         origin,
         as_path: vec![AsPathSegment::Sequence(as_path)],
         next_hop: next_hop.parse().unwrap(),
+        next_hop_link_local: None,
         med,
         local_pref,
         communities,
@@ -1393,4 +1450,223 @@ async fn snapshots_not_configured() {
 
     let (status, _) = get(app, "/api/v1/peers/Router%20A/snapshots").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// --- hide_peer_addresses on a link-local session ---
+
+/// A peer on a link-local session (fe80::2), with `hide_peer_addresses` on.
+/// Its link-local address is also the next hop of its routes.
+fn test_state_link_local_peer(snapshot_data_dir: Option<String>) -> AppState {
+    let rib_store = RibStore::new();
+    let peers = Arc::new(RwLock::new(HashMap::new()));
+    let mut peer = PeerInfo::new(
+        "fe80::2".parse().unwrap(),
+        65001,
+        "Router LL".into(),
+        String::new(),
+        None,
+        vec![AddressFamily::Ipv4Unicast, AddressFamily::Ipv6Unicast],
+    );
+    peer.state = PeerState::Established;
+    peers
+        .write()
+        .unwrap()
+        .insert(peer.id.clone(), Arc::new(RwLock::new(peer.clone())));
+
+    {
+        let rib_arc = rib_store.get_or_create(&peer.id);
+        let mut rib = rib_arc.write().unwrap();
+        let mut route = make_route("198.51.100.0/24", "2001:db8::1", vec![65001]);
+        route.next_hop_link_local = Some("fe80::2".parse().unwrap());
+        rib.insert(route);
+        rib.insert(make_route("203.0.113.0/24", "192.0.2.1", vec![65001]));
+        rib.insert(make_route("2001:db8::/32", "fe80::2", vec![65001]));
+    }
+
+    let event_log = EventLog::new(100, None).unwrap();
+    event_log.push_announce(
+        peer.id.clone(),
+        "2001:db8::/32".parse().unwrap(),
+        None,
+        vec![65001],
+        "fe80::2".parse().unwrap(),
+        Some(65001),
+    );
+    event_log.push_announce(
+        peer.id.clone(),
+        "198.51.100.0/24".parse().unwrap(),
+        None,
+        vec![65001],
+        "2001:db8::1".parse().unwrap(),
+        Some(65001),
+    );
+
+    AppState::new(
+        rib_store,
+        peers,
+        BgpConfig::default(),
+        Arc::new(RwLock::new(CommunityStore::empty())),
+        Arc::new(RwLock::new(AsnStore::empty())),
+        Arc::new(RwLock::new("Reflet".into())),
+        Arc::new(RwLock::new(true)),
+        Arc::new(RwLock::new(false)),
+        Arc::new(RwLock::new(HashMap::new())),
+        event_log,
+        test_notify(),
+        Arc::new(RwLock::new(RpkiStore::empty())),
+        snapshot_data_dir,
+    )
+}
+
+/// Return `prefix => (next_hop, next_hop_link_local)` for the routes in a
+/// paginated response.
+fn next_hops_by_prefix(body: &str) -> HashMap<String, (String, Option<String>)> {
+    let json: serde_json::Value = serde_json::from_str(body).unwrap();
+    json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["prefix"].as_str().unwrap().to_string(),
+                (
+                    r["next_hop"].as_str().unwrap().to_string(),
+                    r["next_hop_link_local"].as_str().map(String::from),
+                ),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn hide_peer_addresses_masks_link_local_next_hops_in_routes() {
+    let state = test_state_link_local_peer(None);
+
+    let (_, body) = get(build_router(state.clone()), "/api/v1/peers/Router%20LL").await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["address"], "::");
+
+    let (status, body) = get(
+        build_router(state.clone()),
+        "/api/v1/peers/Router%20LL/routes/ipv4",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let routes = next_hops_by_prefix(&body);
+    assert_eq!(
+        routes["198.51.100.0/24"],
+        ("2001:db8::1".into(), Some("::".into()))
+    );
+    assert_eq!(routes["203.0.113.0/24"], ("192.0.2.1".into(), None));
+
+    let (_, body) = get(
+        build_router(state.clone()),
+        "/api/v1/peers/Router%20LL/routes/ipv6",
+    )
+    .await;
+    let routes = next_hops_by_prefix(&body);
+    assert_eq!(routes["2001:db8::/32"], ("::".into(), None));
+
+    let (_, body) = get(
+        build_router(state.clone()),
+        "/api/v1/lookup?prefix=2001:db8::/32&type=exact",
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["results"][0]["routes"][0]["next_hop"], "::");
+
+    let (_, body) = get(
+        build_router(state),
+        "/.well-known/looking-glass/v1/show/route/2001:db8::%2F32",
+    )
+    .await;
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["data"][0]["next_hop"], "::");
+}
+
+#[tokio::test]
+async fn hide_peer_addresses_search_ignores_link_local_next_hops() {
+    for (family, search, expected) in [
+        ("ipv4", "nexthop:fe80::2", vec![]),
+        ("ipv4", "nexthop:fe80::/10", vec![]),
+        ("ipv4", "nexthop:2001:db8::1", vec!["198.51.100.0/24"]),
+        ("ipv6", "nexthop:fe80::2", vec![]),
+        ("ipv6", "nexthop:::/0", vec![]),
+    ] {
+        let app = build_router(test_state_link_local_peer(None));
+        let uri = format!("/api/v1/peers/Router%20LL/routes/{family}?search={search}");
+        let (status, body) = get(app, &uri).await;
+        assert_eq!(status, StatusCode::OK, "{search}");
+        let routes = next_hops_by_prefix(&body);
+        let mut prefixes: Vec<&str> = routes.keys().map(String::as_str).collect();
+        prefixes.sort();
+        assert_eq!(prefixes, expected, "{family} {search}");
+    }
+}
+
+#[tokio::test]
+async fn hide_peer_addresses_masks_link_local_next_hops_in_events() {
+    let state = test_state_link_local_peer(None);
+    let (status, body) = get(build_router(state.clone()), "/api/v1/events").await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let events = json["events"].as_array().unwrap();
+    assert_eq!(events[0]["next_hop"], "::");
+    assert_eq!(events[1]["next_hop"], "2001:db8::1");
+
+    // The SSE stream sends the two events at once, then waits for more.
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/stream")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    let mut stream = String::new();
+    while stream.matches("data:").count() < 2 {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), body.frame())
+            .await
+            .expect("SSE event")
+            .unwrap()
+            .unwrap();
+        if let Some(data) = frame.data_ref() {
+            stream.push_str(std::str::from_utf8(data).unwrap());
+        }
+    }
+    let next_hops: Vec<String> = stream
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(|data| {
+            let event: serde_json::Value = serde_json::from_str(data.trim()).unwrap();
+            event["next_hop"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(next_hops, ["::", "2001:db8::1"]);
+}
+
+#[tokio::test]
+async fn hide_peer_addresses_masks_link_local_next_hops_in_snapshots() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+    let state = test_state_link_local_peer(Some(data_dir.to_string()));
+    let meta = reflet_core::rib_snapshots::save_snapshot(&state.rib_store, "fe80::2", data_dir)
+        .unwrap()
+        .unwrap();
+    let ts = meta.timestamp.format("%Y-%m-%dT%H-%M-%SZ").to_string();
+
+    let uri = format!("/api/v1/peers/Router%20LL/snapshots/{ts}/routes/ipv6");
+    let (status, body) = get(build_router(state.clone()), &uri).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        next_hops_by_prefix(&body)["2001:db8::/32"],
+        ("::".into(), None)
+    );
+
+    let uri =
+        format!("/api/v1/peers/Router%20LL/snapshots/{ts}/routes/ipv4?search=nexthop:fe80::2");
+    let (_, body) = get(build_router(state), &uri).await;
+    assert!(next_hops_by_prefix(&body).is_empty(), "{body}");
 }

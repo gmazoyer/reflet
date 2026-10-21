@@ -54,6 +54,8 @@ export interface BgpRoute {
   origin: "IGP" | "EGP" | "INCOMPLETE";
   as_path: AsPathSegment[];
   next_hop: string;
+  /** IPv6 link-local next hop that follows a global next hop. */
+  next_hop_link_local?: string;
   med: number | null;
   local_pref: number | null;
   communities: Community[];

@@ -1,9 +1,9 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::RwLock;
 
 use chrono::Utc;
 use ipnet::{Ipv4Net, Ipv6Net};
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 use zettabgp::prelude::*;
 
 use reflet_core::event_log::{self, EventLog};
@@ -14,11 +14,145 @@ use reflet_core::route::{
     AsPathSegment, BgpRoute, Community, ExtCommunity, LargeCommunity, Origin,
 };
 
+use crate::nexthop::{self, MpNextHop};
+
+/// The zettabgp transport mode for every session, IPv6 sessions included.
+///
+/// zettabgp reads the classic UPDATE fields (withdrawn routes, NLRI,
+/// NEXT_HOP, CLUSTER_LIST) in the format of this mode. RFC 4271 and
+/// RFC 4456 define these fields as IPv4 on every transport. In IPv6 mode,
+/// zettabgp rejects a 4-byte NEXT_HOP and the session resets. IPv6 routes
+/// come in MP_REACH_NLRI and MP_UNREACH_NLRI, which do not use this mode.
+pub const CLASSIC_FIELDS_MODE: BgpTransportMode = BgpTransportMode::IPv4;
+
+/// Decode an UPDATE body and apply it to the peer's RIB.
+///
+/// Reflet reads some path attributes from the raw body, because zettabgp
+/// 0.3 decodes them wrongly (see [`crate::nexthop`]).
+///
+/// A NEXT_HOP that is not 4 bytes long is malformed (RFC 7606 section 7.3).
+/// When the UPDATE has routes in its NLRI field, Reflet withdraws all the
+/// routes of the UPDATE ("treat-as-withdraw"). Otherwise the NEXT_HOP has
+/// no use, and Reflet ignores it (RFC 4760 section 3). The session stays up
+/// in both cases.
+pub fn decode_and_process(
+    body: &[u8],
+    params: &BgpSessionParams,
+    peer_id: &PeerId,
+    rib: &RwLock<PeerRib>,
+    has_ipv4: bool,
+    has_ipv6: bool,
+    event_log: &EventLog,
+) -> Result<(), BgpError> {
+    let raw = nexthop::scan_attributes(body);
+    let mut update = BgpUpdateMessage::new();
+    match &raw.malformed_next_hop {
+        // zettabgp rejects a NEXT_HOP shorter than 4 bytes, so it must not
+        // see the attribute.
+        Some(next_hop) => update.decode_from(params, &next_hop.remove_from(body))?,
+        None => update.decode_from(params, body)?,
+    }
+
+    if let Some(next_hop) = &raw.malformed_next_hop {
+        if has_classic_nlri(&update) {
+            let count = treat_as_withdraw(&update, peer_id, rib, has_ipv4, has_ipv6, event_log);
+            warn!(
+                peer = %peer_id,
+                length = next_hop.len,
+                withdrawn = count,
+                "NEXT_HOP is not 4 bytes long, withdrew the routes of the UPDATE (RFC 7606)"
+            );
+            return Ok(());
+        }
+        debug!(
+            peer = %peer_id,
+            length = next_hop.len,
+            "ignored a NEXT_HOP that is not 4 bytes long in an UPDATE with no NLRI field"
+        );
+    }
+
+    process_update(
+        &update,
+        raw.mp_next_hop,
+        params,
+        peer_id,
+        rib,
+        has_ipv4,
+        has_ipv6,
+        event_log,
+    );
+    Ok(())
+}
+
+fn has_classic_nlri(update: &BgpUpdateMessage) -> bool {
+    match &update.updates {
+        BgpAddrs::IPV4U(addrs) => !addrs.is_empty(),
+        BgpAddrs::IPV4UP(addrs) => !addrs.is_empty(),
+        _ => false,
+    }
+}
+
+/// Withdraw all the routes of an UPDATE, as if they were in its withdrawn
+/// routes field ("treat-as-withdraw", RFC 7606 section 2). Returns the
+/// number of withdrawn routes.
+fn treat_as_withdraw(
+    update: &BgpUpdateMessage,
+    peer_id: &PeerId,
+    rib: &RwLock<PeerRib>,
+    has_ipv4: bool,
+    has_ipv6: bool,
+    event_log: &EventLog,
+) -> usize {
+    let mut fields = vec![&update.withdraws, &update.updates];
+    if let Some(mp_updates) = update.get_mpupdates() {
+        fields.push(&mp_updates.addrs);
+    }
+    if let Some(mp_withdraws) = update.get_mpwithdraws() {
+        fields.push(&mp_withdraws.addrs);
+    }
+
+    let mut rib = rib.write().unwrap();
+    let mut count = 0;
+    for addrs in fields {
+        let routes: Vec<(Prefix, Option<u32>)> = match addrs {
+            BgpAddrs::IPV4U(addrs) if has_ipv4 => addrs
+                .iter()
+                .map(|addr| (bgp_addr_v4_to_prefix(addr), None))
+                .collect(),
+            BgpAddrs::IPV4UP(addrs) if has_ipv4 => addrs
+                .iter()
+                .map(|wp| (bgp_addr_v4_to_prefix(&wp.nlri), Some(wp.pathid)))
+                .collect(),
+            BgpAddrs::IPV6U(addrs) if has_ipv6 => addrs
+                .iter()
+                .map(|addr| (bgp_addr_v6_to_prefix(addr), None))
+                .collect(),
+            BgpAddrs::IPV6UP(addrs) if has_ipv6 => addrs
+                .iter()
+                .map(|wp| (bgp_addr_v6_to_prefix(&wp.nlri), Some(wp.pathid)))
+                .collect(),
+            _ => continue,
+        };
+        for (prefix, path_id) in routes {
+            trace!(peer = %peer_id, prefix = %prefix, ?path_id, "withdrawing route (treat-as-withdraw)");
+            rib.remove(&prefix, path_id);
+            event_log.push_withdraw(peer_id.clone(), prefix, path_id);
+            count += 1;
+        }
+    }
+    count
+}
+
 /// Process a decoded BGP UPDATE message and apply changes to the peer's RIB.
 ///
 /// Only processes routes for address families that are enabled via `has_ipv4` / `has_ipv6`.
-pub fn process_update(
+///
+/// `mp_next_hop` is the MP_REACH_NLRI next hop read from the raw message
+/// (see [`crate::nexthop`]). It replaces the next hop that zettabgp decodes.
+#[allow(clippy::too_many_arguments)]
+fn process_update(
     update: &BgpUpdateMessage,
+    mp_next_hop: Option<MpNextHop>,
     params: &BgpSessionParams,
     peer_id: &PeerId,
     rib: &RwLock<PeerRib>,
@@ -72,6 +206,7 @@ pub fn process_update(
     // Process MP_REACH_NLRI (may contain IPv4 or IPv6)
     let mp_announced = process_mp_reach(
         update,
+        mp_next_hop,
         params,
         peer_id,
         rib,
@@ -139,6 +274,7 @@ fn build_route(
     origin: &Origin,
     as_path: &[AsPathSegment],
     next_hop: IpAddr,
+    next_hop_link_local: Option<Ipv6Addr>,
     med: &Option<u32>,
     local_pref: &Option<u32>,
     communities: &[Community],
@@ -153,6 +289,7 @@ fn build_route(
         origin: *origin,
         as_path: as_path.to_vec(),
         next_hop,
+        next_hop_link_local,
         med: *med,
         local_pref: *local_pref,
         communities: communities.to_vec(),
@@ -195,6 +332,7 @@ fn process_ipv4_nlri(
                     origin,
                     as_path,
                     nh,
+                    None,
                     med,
                     local_pref,
                     communities,
@@ -226,6 +364,7 @@ fn process_ipv4_nlri(
                     origin,
                     as_path,
                     nh,
+                    None,
                     med,
                     local_pref,
                     communities,
@@ -255,6 +394,7 @@ fn process_ipv4_nlri(
 #[allow(clippy::too_many_arguments)]
 fn process_mp_reach(
     update: &BgpUpdateMessage,
+    mp_next_hop: Option<MpNextHop>,
     _params: &BgpSessionParams,
     peer_id: &PeerId,
     rib: &RwLock<PeerRib>,
@@ -273,7 +413,10 @@ fn process_mp_reach(
 ) -> usize {
     let mut count = 0;
     if let Some(mp_updates) = update.get_mpupdates() {
-        let next_hop = mp_nexthop_to_ipaddr(&mp_updates.nexthop);
+        let (next_hop, next_hop_link_local) = match mp_next_hop {
+            Some(nh) => (nh.address, nh.link_local),
+            None => (mp_nexthop_to_ipaddr(&mp_updates.nexthop), None),
+        };
         let flat_as_path = event_log::flatten_as_path(as_path);
 
         match &mp_updates.addrs {
@@ -287,6 +430,7 @@ fn process_mp_reach(
                         origin,
                         as_path,
                         next_hop,
+                        next_hop_link_local,
                         med,
                         local_pref,
                         communities,
@@ -318,6 +462,7 @@ fn process_mp_reach(
                         origin,
                         as_path,
                         next_hop,
+                        next_hop_link_local,
                         med,
                         local_pref,
                         communities,
@@ -349,6 +494,7 @@ fn process_mp_reach(
                         origin,
                         as_path,
                         next_hop,
+                        next_hop_link_local,
                         med,
                         local_pref,
                         communities,
@@ -380,6 +526,7 @@ fn process_mp_reach(
                         origin,
                         as_path,
                         next_hop,
+                        next_hop_link_local,
                         med,
                         local_pref,
                         communities,
@@ -598,6 +745,8 @@ fn extract_large_communities(update: &BgpUpdateMessage) -> Vec<LargeCommunity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::refresh::{AFI_IPV4, AFI_IPV6};
+    use crate::test_util::{NLRI_V4, NLRI_V6, UpdateBody, v6};
 
     #[test]
     fn test_bgp_addr_v4_to_prefix() {
@@ -624,5 +773,156 @@ mod tests {
     fn test_as_path_extraction_empty() {
         let update = BgpUpdateMessage::new();
         assert!(extract_as_path(&update).is_empty());
+    }
+
+    /// A peer on an IPv6 session, with its own RIB.
+    struct TestPeer {
+        params: BgpSessionParams,
+        peer_id: PeerId,
+        rib: RwLock<PeerRib>,
+        event_log: EventLog,
+    }
+
+    impl TestPeer {
+        fn new() -> Self {
+            Self {
+                params: BgpSessionParams::new(
+                    65000,
+                    90,
+                    CLASSIC_FIELDS_MODE,
+                    std::net::Ipv4Addr::new(192, 0, 2, 1),
+                    vec![],
+                ),
+                peer_id: "2001:db8::ffff".to_string(),
+                rib: RwLock::new(PeerRib::new()),
+                event_log: EventLog::new(10, None).unwrap(),
+            }
+        }
+
+        /// Process `body` as the session does.
+        fn receive(&self, body: &[u8]) -> Result<(), BgpError> {
+            decode_and_process(
+                body,
+                &self.params,
+                &self.peer_id,
+                &self.rib,
+                true,
+                true,
+                &self.event_log,
+            )
+        }
+
+        /// The routes in the RIB for `prefix`.
+        fn routes(&self, prefix: &str) -> Vec<BgpRoute> {
+            let rib = self.rib.read().unwrap();
+            rib.get(&prefix.parse().unwrap())
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
+
+    /// Process `body` on a new peer and return the routes for `prefix`.
+    fn process_raw_update(body: &[u8], prefix: &str) -> Vec<BgpRoute> {
+        let peer = TestPeer::new();
+        peer.receive(body).unwrap();
+        peer.routes(prefix)
+    }
+
+    /// IPv4 routes with a classic 4-byte NEXT_HOP, as BIRD sends them over
+    /// an IPv6 session when extended next hop is not negotiated.
+    #[test]
+    fn classic_ipv4_routes_over_ipv6_session() {
+        let body = UpdateBody::new()
+            .aspath(&[65001])
+            .next_hop(&[172, 30, 42, 20])
+            .nlri(&[24, 198, 51, 100]) // 198.51.100.0/24
+            .nlri(&[24, 203, 0, 113]) // 203.0.113.0/24
+            .build();
+        for prefix in ["198.51.100.0/24", "203.0.113.0/24"] {
+            let routes = process_raw_update(&body, prefix);
+            assert_eq!(
+                routes[0].next_hop,
+                "172.30.42.20".parse::<IpAddr>().unwrap()
+            );
+            assert_eq!(routes[0].as_path_flat(), vec![65001]);
+        }
+    }
+
+    #[test]
+    fn ipv4_route_with_ipv6_next_hop() {
+        let next_hop = [v6("2001:db8::1"), v6("fe80::1")].concat();
+        let body = UpdateBody::new()
+            .mp_reach(AFI_IPV4, &next_hop, &NLRI_V4)
+            .build();
+        let routes = process_raw_update(&body, "192.0.2.0/24");
+        assert_eq!(routes[0].next_hop, "2001:db8::1".parse::<IpAddr>().unwrap());
+        assert_eq!(
+            routes[0].next_hop_link_local,
+            Some("fe80::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn ipv4_route_with_ipv6_link_local_next_hop() {
+        let body = UpdateBody::new()
+            .mp_reach(AFI_IPV4, &v6("fe80::1"), &NLRI_V4)
+            .build();
+        let routes = process_raw_update(&body, "192.0.2.0/24");
+        assert_eq!(routes[0].next_hop, "fe80::1".parse::<IpAddr>().unwrap());
+        assert_eq!(routes[0].next_hop_link_local, None);
+    }
+
+    #[test]
+    fn ipv6_route_with_link_local_only_next_hop() {
+        let next_hop = [v6("::"), v6("fe80::1")].concat();
+        let body = UpdateBody::new()
+            .mp_reach(AFI_IPV6, &next_hop, &NLRI_V6)
+            .build();
+        let routes = process_raw_update(&body, "2001:db8::/32");
+        assert_eq!(routes[0].next_hop, "fe80::1".parse::<IpAddr>().unwrap());
+        assert_eq!(routes[0].next_hop_link_local, None);
+    }
+
+    /// RFC 7606 section 7.3: a NEXT_HOP that is not 4 bytes long is
+    /// malformed, and the UPDATE is "treat-as-withdraw". The 16-byte case is
+    /// a classic UPDATE with an IPv6 NEXT_HOP on an IPv6 session.
+    #[test]
+    fn malformed_next_hop_withdraws_all_routes() {
+        let next_hops: [&[u8]; 4] = [&[], &[192, 0, 2], &[192, 0, 2, 1, 0], &v6("2001:db8::1")];
+        for next_hop in next_hops {
+            let peer = TestPeer::new();
+            peer.receive(
+                &UpdateBody::new()
+                    .next_hop(&[192, 0, 2, 1])
+                    .nlri(&NLRI_V4)
+                    .mp_reach(AFI_IPV6, &v6("2001:db8::1"), &NLRI_V6)
+                    .build(),
+            )
+            .unwrap();
+            assert_eq!(peer.routes("192.0.2.0/24").len(), 1);
+            assert_eq!(peer.routes("2001:db8::/32").len(), 1);
+
+            let malformed = UpdateBody::new()
+                .next_hop(next_hop)
+                .nlri(&NLRI_V4)
+                .mp_reach(AFI_IPV6, &v6("2001:db8::1"), &NLRI_V6)
+                .build();
+            let len = next_hop.len();
+            assert!(peer.receive(&malformed).is_ok(), "length {len}");
+            assert!(peer.routes("192.0.2.0/24").is_empty(), "length {len}");
+            assert!(peer.routes("2001:db8::/32").is_empty(), "length {len}");
+        }
+    }
+
+    /// RFC 4760 section 3: an UPDATE with no routes in the NLRI field
+    /// ignores the NEXT_HOP, so a malformed one changes nothing.
+    #[test]
+    fn malformed_next_hop_without_nlri_is_ignored() {
+        let body = UpdateBody::new()
+            .next_hop(&[192, 0, 2])
+            .mp_reach(AFI_IPV6, &v6("2001:db8::1"), &NLRI_V6)
+            .build();
+        let routes = process_raw_update(&body, "2001:db8::/32");
+        assert_eq!(routes[0].next_hop, "2001:db8::1".parse::<IpAddr>().unwrap());
     }
 }

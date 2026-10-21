@@ -66,12 +66,17 @@ pub async fn get_events(
 
     let limit = params.limit.unwrap_or(1000).min(10_000);
 
-    let events = state.event_log.query(
-        params.since_seq,
-        params.peer_id.as_deref(),
-        event_type,
-        limit,
-    );
+    let events: Vec<RouteEvent> = state
+        .event_log
+        .query(
+            params.since_seq,
+            params.peer_id.as_deref(),
+            event_type,
+            limit,
+        )
+        .into_iter()
+        .map(|event| state.sanitize_event(event))
+        .collect();
     let current_seq = state.event_log.current_seq();
     let count = events.len();
 
@@ -128,7 +133,8 @@ pub async fn event_stream(
                 1000,
             );
 
-            for event in &events {
+            for event in events {
+                let event = state.sanitize_event(event);
                 let event_name = match event.event_type {
                     RouteEventType::Announce => "announce",
                     RouteEventType::Withdraw => "withdraw",
@@ -136,7 +142,7 @@ pub async fn event_stream(
                     RouteEventType::SessionDown => "session_down",
                 };
 
-                if let Ok(data) = serde_json::to_string(event) {
+                if let Ok(data) = serde_json::to_string(&event) {
                     yield Ok(Event::default()
                         .event(event_name)
                         .data(data)

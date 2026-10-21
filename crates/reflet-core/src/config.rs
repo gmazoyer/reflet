@@ -177,6 +177,14 @@ pub struct PeerConfig {
     pub location: Option<String>,
     #[serde(default = "default_families")]
     pub families: Vec<AddressFamily>,
+    /// Announce the Extended Next Hop Encoding capability (RFC 8950) for
+    /// IPv4 unicast, so that the peer can send IPv4 routes with an IPv6
+    /// next hop. Off by default, so that an upgrade does not change the
+    /// next hops that a peer sends. Reflet accepts an IPv6 next hop for an
+    /// IPv4 route also when the capability is off. Has no effect when
+    /// `families` has no IPv4 unicast.
+    #[serde(default)]
+    pub extended_next_hop: bool,
     /// Interval in seconds between RIB snapshots for this peer.
     /// Set to 0 or omit to disable snapshots.
     #[serde(default)]
@@ -452,6 +460,25 @@ name = "Router A"
 "#;
         let config = Config::from_toml(toml).unwrap();
         assert_eq!(config.peers[0].families.len(), 2);
+    }
+
+    #[test]
+    fn peer_extended_next_hop() {
+        let toml = r#"
+[[peers]]
+address = "10.0.0.2"
+remote_asn = 65001
+name = "Router A"
+
+[[peers]]
+address = "10.0.0.3"
+remote_asn = 65001
+name = "Router B"
+extended_next_hop = true
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert!(!config.peers[0].extended_next_hop);
+        assert!(config.peers[1].extended_next_hop);
     }
 
     #[test]

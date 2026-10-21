@@ -15,8 +15,10 @@ use reflet_core::prefix::AddressFamily;
 use reflet_core::rib::RibStore;
 
 use crate::graceful_restart::PeerGrInfo;
+use crate::nexthop;
 use crate::refresh::CommandTx;
-use crate::session::BgpSession;
+use crate::session::{BgpSession, LocalParams};
+use crate::update;
 
 /// The BGP speaker: listens for connections and manages per-peer sessions.
 pub struct BgpSpeaker {
@@ -311,12 +313,7 @@ impl BgpSpeaker {
         });
     }
 
-    fn build_session_params(&self, peer_config: &PeerConfig) -> BgpSessionParams {
-        let peer_mode = match peer_config.address {
-            std::net::IpAddr::V4(_) => BgpTransportMode::IPv4,
-            std::net::IpAddr::V6(_) => BgpTransportMode::IPv6,
-        };
-
+    fn build_session_params(&self, peer_config: &PeerConfig) -> LocalParams {
         let mut caps = Vec::new();
 
         for family in &peer_config.families {
@@ -379,12 +376,93 @@ impl BgpSpeaker {
         // Always advertise 4-byte ASN capability
         caps.push(BgpCapability::CapASN32(self.bgp_config.local_asn));
 
-        BgpSessionParams::new(
-            self.bgp_config.local_asn,
-            self.bgp_config.hold_time,
-            peer_mode,
-            self.bgp_config.router_id,
-            caps,
+        // Advertise Extended Next Hop (RFC 8950) when configured. zettabgp
+        // cannot encode it, so it goes in the extra OPEN parameters.
+        let mut open_extra_params = Vec::new();
+        if peer_config.extended_next_hop
+            && peer_config.families.contains(&AddressFamily::Ipv4Unicast)
+        {
+            open_extra_params.extend_from_slice(&nexthop::extended_next_hop_param());
+        }
+
+        LocalParams {
+            session: BgpSessionParams::new(
+                self.bgp_config.local_asn,
+                self.bgp_config.hold_time,
+                update::CLASSIC_FIELDS_MODE,
+                self.bgp_config.router_id,
+                caps,
+            ),
+            open_extra_params,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BOTH_FAMILIES: [AddressFamily; 2] =
+        [AddressFamily::Ipv4Unicast, AddressFamily::Ipv6Unicast];
+
+    fn speaker() -> BgpSpeaker {
+        BgpSpeaker::new(
+            BgpConfig::default(),
+            Vec::new(),
+            "127.0.0.1:0".parse().unwrap(),
+            RibStore::new(),
+            false,
+            EventLog::disabled(),
         )
+    }
+
+    fn peer_config(
+        address: &str,
+        families: &[AddressFamily],
+        extended_next_hop: bool,
+    ) -> PeerConfig {
+        PeerConfig {
+            address: address.parse().unwrap(),
+            remote_asn: 65001,
+            name: "Router A".into(),
+            description: String::new(),
+            location: None,
+            families: families.to_vec(),
+            extended_next_hop,
+            snapshot_interval: None,
+        }
+    }
+
+    /// The classic UPDATE fields are IPv4 on every session. In IPv6 mode,
+    /// zettabgp rejects the 4-byte NEXT_HOP that BIRD sends over IPv6, and
+    /// the session resets.
+    #[test]
+    fn ipv6_peer_reads_classic_fields_as_ipv4() {
+        for address in ["2001:db8::2", "fe80::2", "192.0.2.2"] {
+            let params =
+                speaker().build_session_params(&peer_config(address, &BOTH_FAMILIES, false));
+            assert!(
+                matches!(params.session.peer_mode, BgpTransportMode::IPv4),
+                "{address}"
+            );
+        }
+    }
+
+    #[test]
+    fn extended_next_hop_capability_in_open() {
+        let capability = nexthop::extended_next_hop_param().to_vec();
+        let cases: [(&[AddressFamily], bool, Vec<u8>); 3] = [
+            (&BOTH_FAMILIES, true, capability),
+            (&BOTH_FAMILIES, false, Vec::new()),
+            (&[AddressFamily::Ipv6Unicast], true, Vec::new()),
+        ];
+        for (families, extended_next_hop, expected) in cases {
+            let config = peer_config("2001:db8::2", families, extended_next_hop);
+            let params = speaker().build_session_params(&config);
+            assert_eq!(
+                params.open_extra_params, expected,
+                "{families:?} extended_next_hop={extended_next_hop}"
+            );
+        }
     }
 }

@@ -263,6 +263,7 @@ export default function PeerRoutes() {
             <div><span className="font-mono text-xs bg-gray-200 dark:bg-gray-700 px-1 rounded">origin:igp</span> origin (igp/egp/incomplete)</div>
             <div><span className="font-mono text-xs bg-gray-200 dark:bg-gray-700 px-1 rounded">med:&gt;100</span> MED with comparison</div>
             <div><span className="font-mono text-xs bg-gray-200 dark:bg-gray-700 px-1 rounded">localpref:&gt;=200</span> local-pref with comparison</div>
+            <div><span className="font-mono text-xs bg-gray-200 dark:bg-gray-700 px-1 rounded">nexthop:2001:db8::1</span> next hop address or network (also link-local)</div>
             <div className="sm:col-span-2 mt-1 text-gray-500 dark:text-gray-400">Combine multiple filters with spaces for AND logic.</div>
           </div>
         </div>

@@ -23,10 +23,20 @@ use crate::refresh::{
 };
 use crate::update;
 
+/// What Reflet announces in its OPEN to one peer.
+#[derive(Clone)]
+pub struct LocalParams {
+    /// Session parameters, with the capabilities that zettabgp encodes.
+    pub session: BgpSessionParams,
+    /// Encoded OPEN optional parameters that zettabgp cannot encode, such
+    /// as the Extended Next Hop capability.
+    pub open_extra_params: Vec<u8>,
+}
+
 /// A BGP session managing the FSM for a single peer.
 pub struct BgpSession {
     peer_config: PeerConfig,
-    local_params: BgpSessionParams,
+    local_params: LocalParams,
     rib_store: RibStore,
     peer_info: Arc<RwLock<PeerInfo>>,
     shutdown_rx: watch::Receiver<bool>,
@@ -41,7 +51,7 @@ impl BgpSession {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         peer_config: PeerConfig,
-        local_params: BgpSessionParams,
+        local_params: LocalParams,
         rib_store: RibStore,
         peer_info: Arc<RwLock<PeerInfo>>,
         shutdown_rx: watch::Receiver<bool>,
@@ -70,7 +80,7 @@ impl BgpSession {
         let peer_id = self.peer_id();
         let mut buf = vec![0u8; BGP_MAX_MSG_SIZE];
         let mut reader = MessageReader::default();
-        let mut params = self.local_params.clone();
+        let mut params = self.local_params.session.clone();
 
         info!(peer = %peer_id, "BGP session starting");
 
@@ -78,7 +88,13 @@ impl BgpSession {
         self.set_state(PeerState::Connect);
 
         // Send OPEN
-        codec::send_open(&mut stream, &params, &mut buf).await?;
+        codec::send_open(
+            &mut stream,
+            &params,
+            &self.local_params.open_extra_params,
+            &mut buf,
+        )
+        .await?;
         self.set_state(PeerState::OpenSent);
         debug!(peer = %peer_id, "sent OPEN message");
 
@@ -359,9 +375,7 @@ impl BgpSession {
                             }
 
                             // Normal decode + process (EoR messages decode as empty updates)
-                            let mut update_msg = BgpUpdateMessage::new();
-                            update_msg.decode_from(&params, &buf[..msg_len])?;
-                            update::process_update(&update_msg, &params, &peer_id, &rib_arc, has_ipv4, has_ipv6, &self.event_log);
+                            update::decode_and_process(&buf[..msg_len], &params, &peer_id, &rib_arc, has_ipv4, has_ipv6, &self.event_log)?;
 
                             // Update prefix counts
                             if let Ok(rib) = rib_arc.read() {

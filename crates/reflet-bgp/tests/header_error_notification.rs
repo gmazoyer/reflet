@@ -11,7 +11,7 @@ use zettabgp::prelude::*;
 
 use reflet_bgp::codec::{self, BGP_MAX_MSG_SIZE, MessageReader, RawMessageType};
 use reflet_bgp::error::BgpSessionError;
-use reflet_bgp::session::BgpSession;
+use reflet_bgp::session::{BgpSession, LocalParams};
 use reflet_core::config::PeerConfig;
 use reflet_core::event_log::EventLog;
 use reflet_core::peer::{PeerInfo, PeerState};
@@ -42,6 +42,7 @@ async fn bad_marker_gets_notification_before_close() {
         description: String::new(),
         location: None,
         families: vec![AddressFamily::Ipv4Unicast],
+        extended_next_hop: false,
         snapshot_interval: None,
     };
     let peer_info = Arc::new(RwLock::new(PeerInfo::new(
@@ -58,7 +59,10 @@ async fn bad_marker_gets_notification_before_close() {
     let (_command_tx, command_rx) = mpsc::channel(4);
     let mut session = BgpSession::new(
         peer_config,
-        params(65000, Ipv4Addr::new(192, 0, 2, 1)),
+        LocalParams {
+            session: params(65000, Ipv4Addr::new(192, 0, 2, 1)),
+            open_extra_params: Vec::new(),
+        },
         RibStore::new(),
         peer_info.clone(),
         shutdown_rx,
@@ -83,7 +87,7 @@ async fn bad_marker_gets_notification_before_close() {
     .unwrap()
     .unwrap();
     assert_eq!(msg_type, RawMessageType::Standard(BgpMessageType::Open));
-    codec::send_open(&mut peer, &peer_params, &mut buf)
+    codec::send_open(&mut peer, &peer_params, &[], &mut buf)
         .await
         .unwrap();
     let (msg_type, _) = timeout(
