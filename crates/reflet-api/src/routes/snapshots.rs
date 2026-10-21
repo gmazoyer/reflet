@@ -66,7 +66,13 @@ pub async fn list_snapshots(
     })
     .await
     .map_err(|e| ApiError::Internal(format!("snapshot task failed: {e}")))?
-    .map_err(|e| ApiError::Internal(format!("failed to list snapshots: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("failed to list snapshots: {e}")))?
+    .into_iter()
+    .map(|mut meta| {
+        meta.peer_id = state.public_peer_id(&meta.peer_id);
+        meta
+    })
+    .collect();
 
     Ok(Json(SnapshotListResponse { snapshots }))
 }

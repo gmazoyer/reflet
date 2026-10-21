@@ -21,6 +21,7 @@ pub struct LookupParams {
 
 #[derive(Serialize, ToSchema)]
 pub struct LookupResult {
+    /// The peer address, or the peer name when `hide_peer_addresses` is on.
     pub peer_id: PeerId,
     pub peer_name: String,
     #[schema(value_type = String)]
@@ -57,12 +58,21 @@ pub async fn lookup(
         .parse()
         .map_err(|e| ApiError::BadRequest(format!("invalid prefix: {e}")))?;
 
-    let peer_name = |id: &str| -> String {
-        state
-            .peer_info(id)
-            .map(|p| p.name)
-            .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| id.to_string())
+    let result = |peer_id: PeerId, matched_prefix: Option<String>, routes: Vec<BgpRoute>| {
+        let public_id = state.public_peer_id(&peer_id);
+        LookupResult {
+            peer_name: state
+                .peer_info(&peer_id)
+                .map(|p| p.name)
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| public_id.clone()),
+            peer_id: public_id,
+            matched_prefix,
+            routes: routes
+                .into_iter()
+                .map(|r| state.annotate_route(state.sanitize_route(r)))
+                .collect(),
+        }
     };
 
     let results = match lookup_type {
@@ -72,16 +82,7 @@ pub async fn lookup(
                 .into_iter()
                 .map(|(peer_id, routes)| {
                     let matched_prefix = routes.first().map(|r| r.prefix.to_string());
-                    let name = peer_name(&peer_id);
-                    LookupResult {
-                        peer_id,
-                        peer_name: name,
-                        matched_prefix,
-                        routes: routes
-                            .into_iter()
-                            .map(|r| state.annotate_route(state.sanitize_route(r)))
-                            .collect(),
-                    }
+                    result(peer_id, matched_prefix, routes)
                 })
                 .collect()
         }
@@ -91,16 +92,7 @@ pub async fn lookup(
                 matches
                     .into_iter()
                     .map(|(peer_id, matched, routes)| {
-                        let name = peer_name(&peer_id);
-                        LookupResult {
-                            peer_id,
-                            peer_name: name,
-                            matched_prefix: Some(matched.to_string()),
-                            routes: routes
-                                .into_iter()
-                                .map(|r| state.annotate_route(state.sanitize_route(r)))
-                                .collect(),
-                        }
+                        result(peer_id, Some(matched.to_string()), routes)
                     })
                     .collect()
             }
@@ -109,16 +101,7 @@ pub async fn lookup(
                 matches
                     .into_iter()
                     .map(|(peer_id, matched, routes)| {
-                        let name = peer_name(&peer_id);
-                        LookupResult {
-                            peer_id,
-                            peer_name: name,
-                            matched_prefix: Some(matched.to_string()),
-                            routes: routes
-                                .into_iter()
-                                .map(|r| state.annotate_route(state.sanitize_route(r)))
-                                .collect(),
-                        }
+                        result(peer_id, Some(matched.to_string()), routes)
                     })
                     .collect()
             }
@@ -130,16 +113,7 @@ pub async fn lookup(
                     .into_iter()
                     .map(|(peer_id, routes)| {
                         let matched_prefix = routes.first().map(|r| r.prefix.to_string());
-                        let name = peer_name(&peer_id);
-                        LookupResult {
-                            peer_id,
-                            peer_name: name,
-                            matched_prefix,
-                            routes: routes
-                                .into_iter()
-                                .map(|r| state.annotate_route(state.sanitize_route(r)))
-                                .collect(),
-                        }
+                        result(peer_id, matched_prefix, routes)
                     })
                     .collect()
             }
@@ -149,16 +123,7 @@ pub async fn lookup(
                     .into_iter()
                     .map(|(peer_id, routes)| {
                         let matched_prefix = routes.first().map(|r| r.prefix.to_string());
-                        let name = peer_name(&peer_id);
-                        LookupResult {
-                            peer_id,
-                            peer_name: name,
-                            matched_prefix,
-                            routes: routes
-                                .into_iter()
-                                .map(|r| state.annotate_route(state.sanitize_route(r)))
-                                .collect(),
-                        }
+                        result(peer_id, matched_prefix, routes)
                     })
                     .collect()
             }

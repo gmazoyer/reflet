@@ -195,6 +195,7 @@ async fn get_peer_by_id() {
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["remote_asn"], 65001);
+    assert_eq!(json["id"], "10.0.0.2");
     assert_eq!(json["name"], "Router A");
     assert_eq!(json["description"], "Primary router in Amsterdam");
     assert_eq!(json["state"], "Established");
@@ -1538,6 +1539,31 @@ fn next_hops_by_prefix(body: &str) -> HashMap<String, (String, Option<String>)> 
         .collect()
 }
 
+/// Read `count` events from an SSE stream.
+async fn sse_events(app: axum::Router, uri: &str, count: usize) -> Vec<serde_json::Value> {
+    let response = app
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    let mut stream = String::new();
+    while stream.matches("data:").count() < count {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), body.frame())
+            .await
+            .expect("SSE event")
+            .unwrap()
+            .unwrap();
+        if let Some(data) = frame.data_ref() {
+            stream.push_str(std::str::from_utf8(data).unwrap());
+        }
+    }
+    stream
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(|data| serde_json::from_str(data.trim()).unwrap())
+        .collect()
+}
+
 #[tokio::test]
 async fn hide_peer_addresses_masks_link_local_next_hops_in_routes() {
     let state = test_state_link_local_peer(None);
@@ -1615,34 +1641,10 @@ async fn hide_peer_addresses_masks_link_local_next_hops_in_events() {
     assert_eq!(events[1]["next_hop"], "2001:db8::1");
 
     // The SSE stream sends the two events at once, then waits for more.
-    let response = build_router(state)
-        .oneshot(
-            Request::builder()
-                .uri("/api/v1/events/stream")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let mut body = response.into_body();
-    let mut stream = String::new();
-    while stream.matches("data:").count() < 2 {
-        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), body.frame())
-            .await
-            .expect("SSE event")
-            .unwrap()
-            .unwrap();
-        if let Some(data) = frame.data_ref() {
-            stream.push_str(std::str::from_utf8(data).unwrap());
-        }
-    }
-    let next_hops: Vec<String> = stream
-        .lines()
-        .filter_map(|line| line.strip_prefix("data:"))
-        .map(|data| {
-            let event: serde_json::Value = serde_json::from_str(data.trim()).unwrap();
-            event["next_hop"].as_str().unwrap().to_string()
-        })
+    let events = sse_events(build_router(state), "/api/v1/events/stream", 2).await;
+    let next_hops: Vec<&str> = events
+        .iter()
+        .map(|event| event["next_hop"].as_str().unwrap())
         .collect();
     assert_eq!(next_hops, ["::", "2001:db8::1"]);
 }
@@ -1669,4 +1671,137 @@ async fn hide_peer_addresses_masks_link_local_next_hops_in_snapshots() {
         format!("/api/v1/peers/Router%20LL/snapshots/{ts}/routes/ipv4?search=nexthop:fe80::2");
     let (_, body) = get(build_router(state), &uri).await;
     assert!(next_hops_by_prefix(&body).is_empty(), "{body}");
+}
+
+// --- hide_peer_addresses and peer IDs ---
+
+#[tokio::test]
+async fn hide_peer_addresses_shows_peer_name_as_peer_id() {
+    let state = test_state_link_local_peer(None);
+    for (uri, id_field) in [
+        ("/api/v1/peers", "/0/id"),
+        ("/api/v1/peers/Router%20LL", "/id"),
+        (
+            "/api/v1/lookup?prefix=2001:db8::/32&type=exact",
+            "/results/0/peer_id",
+        ),
+        (
+            "/api/v1/lookup?prefix=198.51.100.1/32",
+            "/results/0/peer_id",
+        ),
+        ("/api/v1/events", "/events/0/peer_id"),
+        ("/.well-known/looking-glass/v1/routers", "/data/0/id"),
+        (
+            "/.well-known/looking-glass/v1/routers/Router%20LL",
+            "/data/id",
+        ),
+        (
+            "/.well-known/looking-glass/v1/show/bgp/summary",
+            "/data/0/peer",
+        ),
+        (
+            "/.well-known/looking-glass/v1/show/route/2001:db8::%2F32",
+            "/data/0/peer_id",
+        ),
+    ] {
+        let (status, body) = get(build_router(state.clone()), uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert!(!body.contains("fe80"), "{uri}: {body}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json.pointer(id_field).unwrap(), "Router LL", "{uri}");
+    }
+
+    let (_, body) = get(build_router(state.clone()), "/metrics").await;
+    assert!(!body.contains("fe80"), "{body}");
+    assert!(body.contains(r#"refletpeer_up{peer="Router LL""#), "{body}");
+
+    let events = sse_events(build_router(state.clone()), "/api/v1/events/stream", 2).await;
+    assert!(
+        events.iter().all(|event| event["peer_id"] == "Router LL"),
+        "{events:?}"
+    );
+
+    // The peer has no session, so the route refresh fails.
+    let (status, body) = post(build_router(state), "/api/v1/peers/Router%20LL/refresh").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!body.contains("fe80"), "{body}");
+    assert!(body.contains("Router LL"), "{body}");
+}
+
+#[tokio::test]
+async fn hide_peer_addresses_shows_peer_name_in_snapshot_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().to_str().unwrap();
+    let state = test_state_link_local_peer(Some(data_dir.to_string()));
+    reflet_core::rib_snapshots::save_snapshot(&state.rib_store, "fe80::2", data_dir).unwrap();
+
+    let (status, body) = get(build_router(state), "/api/v1/peers/Router%20LL/snapshots").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains("fe80"), "{body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["snapshots"][0]["peer_id"], "Router LL");
+}
+
+#[tokio::test]
+async fn hide_peer_addresses_events_filter_takes_peer_name() {
+    let state = test_state_link_local_peer(None);
+    for (filter, count) in [("Router%20LL", 2), ("fe80::2", 0), ("Unknown", 0)] {
+        let uri = format!("/api/v1/events?peer_id={filter}");
+        let (status, body) = get(build_router(state.clone()), &uri).await;
+        assert_eq!(status, StatusCode::OK, "{filter}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(json["count"], count, "{filter}");
+    }
+
+    let uri = "/api/v1/events/stream?peer_id=Router%20LL";
+    assert_eq!(
+        sse_events(build_router(state.clone()), uri, 2).await.len(),
+        2
+    );
+
+    // A filter on the peer address must not select the events of the peer,
+    // so the stream sends nothing.
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/stream?peer_id=fe80::2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    let frame = tokio::time::timeout(std::time::Duration::from_millis(500), body.frame()).await;
+    assert!(frame.is_err(), "the stream sent an event");
+}
+
+#[tokio::test]
+async fn hide_peer_addresses_hides_ids_of_unconfigured_peers() {
+    // A saved RIB and the event log can hold a peer that is no longer in the
+    // configuration, so it has no name.
+    let state = test_state_link_local_peer(None);
+    state
+        .rib_store
+        .get_or_create("192.0.2.9")
+        .write()
+        .unwrap()
+        .insert(make_route("192.0.2.128/25", "203.0.113.254", vec![65009]));
+    state
+        .event_log
+        .push_session_down("192.0.2.9".into(), "peer removed".into());
+
+    let (_, body) = get(
+        build_router(state.clone()),
+        "/api/v1/lookup?prefix=192.0.2.128/25&type=exact",
+    )
+    .await;
+    assert!(!body.contains("192.0.2.9"), "{body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["results"][0]["peer_id"], "0.0.0.0");
+    assert_eq!(json["results"][0]["peer_name"], "0.0.0.0");
+
+    let (_, body) = get(build_router(state), "/api/v1/events?type=session_down").await;
+    assert!(!body.contains("192.0.2.9"), "{body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["events"][0]["peer_id"], "0.0.0.0");
 }

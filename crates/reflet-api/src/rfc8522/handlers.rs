@@ -142,6 +142,7 @@ pub async fn show_route(
         .into_iter()
         .flat_map(|(peer_id, routes)| {
             let state = &state;
+            let peer_id = state.public_peer_id(&peer_id);
             routes.into_iter().map(move |route| {
                 let route = state.sanitize_route(route);
                 RouteLookupEntry {

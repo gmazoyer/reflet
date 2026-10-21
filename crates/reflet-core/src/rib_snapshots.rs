@@ -16,6 +16,8 @@ use crate::rib_persistence::PersistedPeerRib;
 /// Metadata about a single RIB snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SnapshotMeta {
+    /// The peer address. The API shows the peer name when
+    /// `hide_peer_addresses` is on.
     pub peer_id: String,
     pub timestamp: DateTime<Utc>,
     pub route_count: usize,

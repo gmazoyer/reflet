@@ -13,11 +13,54 @@ use reflet_core::event_log::{RouteEvent, RouteEventType};
 
 use crate::state::AppState;
 
+/// The peer that an events request selects.
+enum PeerFilter {
+    /// The request has no peer filter.
+    All,
+    /// The internal ID of the selected peer.
+    Peer(String),
+    /// No peer has the requested ID, so no event matches.
+    Unknown,
+}
+
+impl PeerFilter {
+    fn new(state: &AppState, requested: Option<&str>) -> Self {
+        match requested {
+            None => Self::All,
+            Some(public_id) => state
+                .internal_peer_id(public_id)
+                .map_or(Self::Unknown, Self::Peer),
+        }
+    }
+}
+
+/// Query the event log and apply the address-hiding policy to the events.
+fn query_events(
+    state: &AppState,
+    since_seq: Option<u64>,
+    peer: &PeerFilter,
+    event_type: Option<RouteEventType>,
+    limit: usize,
+) -> Vec<RouteEvent> {
+    let peer_id = match peer {
+        PeerFilter::All => None,
+        PeerFilter::Peer(id) => Some(id.as_str()),
+        PeerFilter::Unknown => return Vec::new(),
+    };
+    state
+        .event_log
+        .query(since_seq, peer_id, event_type, limit)
+        .into_iter()
+        .map(|event| state.sanitize_event(event))
+        .collect()
+}
+
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct EventsQuery {
     /// Only return events with seq > this value (cursor-based polling).
     pub since_seq: Option<u64>,
-    /// Filter by peer ID.
+    /// Filter by peer ID: the peer address, or the peer name when
+    /// `hide_peer_addresses` is on.
     pub peer_id: Option<String>,
     /// Filter by event type (announce, withdraw, session_up, session_down).
     #[serde(rename = "type")]
@@ -66,17 +109,8 @@ pub async fn get_events(
 
     let limit = params.limit.unwrap_or(1000).min(10_000);
 
-    let events: Vec<RouteEvent> = state
-        .event_log
-        .query(
-            params.since_seq,
-            params.peer_id.as_deref(),
-            event_type,
-            limit,
-        )
-        .into_iter()
-        .map(|event| state.sanitize_event(event))
-        .collect();
+    let peer = PeerFilter::new(&state, params.peer_id.as_deref());
+    let events = query_events(&state, params.since_seq, &peer, event_type, limit);
     let current_seq = state.event_log.current_seq();
     let count = events.len();
 
@@ -91,7 +125,8 @@ pub async fn get_events(
 pub struct EventStreamQuery {
     /// Resume from this sequence number.
     pub since_seq: Option<u64>,
-    /// Filter by peer ID.
+    /// Filter by peer ID: the peer address, or the peer name when
+    /// `hide_peer_addresses` is on.
     pub peer_id: Option<String>,
     /// Filter by event type (announce, withdraw, session_up, session_down).
     #[serde(rename = "type")]
@@ -122,19 +157,13 @@ pub async fn event_stream(
     });
 
     let event_type = params.event_type.as_deref().and_then(RouteEventType::parse);
-    let peer_id = params.peer_id;
+    let peer = PeerFilter::new(&state, params.peer_id.as_deref());
 
     let stream = stream! {
         loop {
-            let events = state.event_log.query(
-                last_seq,
-                peer_id.as_deref(),
-                event_type,
-                1000,
-            );
+            let events = query_events(&state, last_seq, &peer, event_type, 1000);
 
             for event in events {
-                let event = state.sanitize_event(event);
                 let event_name = match event.event_type {
                     RouteEventType::Announce => "announce",
                     RouteEventType::Withdraw => "withdraw",

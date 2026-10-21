@@ -31,6 +31,8 @@ pub struct PrefixCounts {
 /// Metadata about a BGP peer.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PeerInfo {
+    /// The peer address. The API shows the peer name when
+    /// `hide_peer_addresses` is on.
     pub id: PeerId,
     #[schema(value_type = String, example = "10.0.0.2")]
     pub address: IpAddr,

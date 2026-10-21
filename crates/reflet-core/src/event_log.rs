@@ -39,6 +39,8 @@ impl RouteEventType {
 pub struct RouteEvent {
     pub seq: u64,
     pub timestamp: DateTime<Utc>,
+    /// The peer address. The API shows the peer name when
+    /// `hide_peer_addresses` is on.
     pub peer_id: String,
     #[serde(rename = "type")]
     pub event_type: RouteEventType,

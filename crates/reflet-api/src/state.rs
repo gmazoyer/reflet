@@ -99,8 +99,9 @@ impl AppState {
 
     /// Get a specific peer's info by ID, or return 404.
     pub fn peer_or_404(&self, id: &str) -> Result<PeerInfo, ApiError> {
-        self.peer_info(id)
-            .ok_or_else(|| ApiError::NotFound(format!("peer {id} not found")))
+        self.peer_info(id).ok_or_else(|| {
+            ApiError::NotFound(format!("peer {} not found", self.public_peer_id(id)))
+        })
     }
 
     /// Aggregate stats from all peers: (total_peers, established_count, total_ipv4, total_ipv6).
@@ -129,10 +130,13 @@ impl AppState {
         if *self.disable_route_refresh.read().unwrap() {
             return Err(ApiError::Forbidden("route refresh is disabled".to_string()));
         }
-        let channels = self.command_channels.read().unwrap();
-        let tx = channels
-            .get(peer_id)
-            .ok_or_else(|| ApiError::NotFound(format!("peer {peer_id} has no active session")))?;
+        let tx = self.command_channels.read().unwrap().get(peer_id).cloned();
+        let tx = tx.ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "peer {} has no active session",
+                self.public_peer_id(peer_id)
+            ))
+        })?;
         tx.try_send(reflet_bgp::refresh::SessionCommand::RouteRefresh)
             .map_err(|_| ApiError::Internal("failed to send refresh command".into()))
     }
@@ -141,13 +145,38 @@ impl AppState {
         *self.hide_peer_addresses.read().unwrap()
     }
 
+    /// The ID of a peer in API responses. The internal ID is the peer
+    /// address, so with hiding on the API shows the peer name. A peer that is
+    /// not in the configuration, such as one with a saved RIB, has no name:
+    /// its ID shows as the unspecified address.
+    pub fn public_peer_id(&self, id: &str) -> String {
+        if !self.hides_peer_addresses() {
+            return id.to_string();
+        }
+        let peers = self.peers.read().unwrap();
+        if let Some(info) = peers.get(id).and_then(|p| p.read().ok()) {
+            return info.name.clone();
+        }
+        id.parse()
+            .map_or(IpAddr::V6(Ipv6Addr::UNSPECIFIED), unspecified)
+            .to_string()
+    }
+
+    /// The internal ID of the peer that has this public ID, or `None` when
+    /// no peer has it. See [`Self::public_peer_id`].
+    pub fn internal_peer_id(&self, public_id: &str) -> Option<String> {
+        if self.hides_peer_addresses() {
+            self.resolve_name(public_id).ok()
+        } else {
+            Some(public_id.to_string())
+        }
+    }
+
     /// Mask sensitive IP fields on a peer info when hiding is enabled.
     fn sanitize_peer(&self, mut peer: PeerInfo) -> PeerInfo {
         if self.hides_peer_addresses() {
-            peer.address = match peer.address {
-                IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-            };
+            peer.id = peer.name.clone();
+            peer.address = unspecified(peer.address);
             peer.router_id = Ipv4Addr::UNSPECIFIED;
         }
         peer
@@ -163,10 +192,12 @@ impl AppState {
         route
     }
 
-    /// Apply the address-hiding policy of [`Self::sanitize_route`] to a
-    /// route event.
+    /// Apply the address-hiding policy to a route event: its peer ID, as in
+    /// [`Self::public_peer_id`], and its next hop, as in
+    /// [`Self::sanitize_route`].
     pub fn sanitize_event(&self, mut event: RouteEvent) -> RouteEvent {
         if self.hides_peer_addresses() {
+            event.peer_id = self.public_peer_id(&event.peer_id);
             event.next_hop = event.next_hop.map(route::mask_link_local);
         }
         event
@@ -189,5 +220,13 @@ impl AppState {
             route.rpki_status = Some(rpki_store.validate(&route.prefix, route.origin_as));
         }
         route
+    }
+}
+
+/// The unspecified address of the family of `addr`.
+fn unspecified(addr: IpAddr) -> IpAddr {
+    match addr {
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
     }
 }
