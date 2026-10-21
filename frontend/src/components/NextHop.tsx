@@ -1,6 +1,6 @@
 import type { BgpRoute } from "../api/types";
 import { displayAddress } from "../utils/hiddenAddress";
-import { describeNextHop } from "../utils/nextHop";
+import { describeNextHop, EXTENDED_NEXT_HOP_LABEL } from "../utils/nextHop";
 import Tooltip from "./Tooltip";
 
 interface NextHopProps {
@@ -25,6 +25,7 @@ export default function NextHop({ route, showDetails }: NextHopProps) {
               <>
                 <div>{info.afiSafi}</div>
                 <div>Next hop: {info.type}</div>
+                {info.extendedNextHop && <div>{EXTENDED_NEXT_HOP_LABEL}</div>}
               </>
             }
           >
@@ -42,6 +43,7 @@ export default function NextHop({ route, showDetails }: NextHopProps) {
       {showDetails && (
         <div className="font-sans text-xs text-gray-500 dark:text-gray-500">
           {info.afiSafi} · {info.type}
+          {info.extendedNextHop && ` · ${EXTENDED_NEXT_HOP_LABEL}`}
         </div>
       )}
     </div>

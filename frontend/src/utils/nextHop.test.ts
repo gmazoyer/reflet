@@ -34,14 +34,15 @@ describe("describeNextHop", () => {
     });
     expect(info).toEqual({
       afiSafi: "IPv4 unicast (AFI 1, SAFI 1)",
-      type: "IPv6 global + link-local (RFC 8950)",
+      type: "IPv6 global + link-local",
       extendedNextHop: true,
     });
   });
 
   it("describes an IPv4 route with a link-local next hop", () => {
     const info = describeNextHop({ prefix: "10.0.0.0/24", next_hop: "fe80::1" });
-    expect(info.type).toBe("IPv6 link-local (RFC 8950)");
+    expect(info.type).toBe("IPv6 link-local");
+    expect(info.extendedNextHop).toBe(true);
   });
 
   it("describes a link-local next hop that the server hides", () => {
@@ -54,7 +55,7 @@ describe("describeNextHop", () => {
         next_hop: "2001:db8::1",
         next_hop_link_local: "::",
       }).type,
-    ).toBe("IPv6 global + link-local (RFC 8950)");
+    ).toBe("IPv6 global + link-local");
   });
 
   it("describes IPv6 routes", () => {
