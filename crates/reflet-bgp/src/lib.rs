@@ -5,4 +5,6 @@ pub mod nexthop;
 pub mod refresh;
 pub mod session;
 pub mod speaker;
+#[cfg(test)]
+mod test_util;
 pub mod update;

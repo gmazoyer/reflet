@@ -627,6 +627,8 @@ fn extract_large_communities(update: &BgpUpdateMessage) -> Vec<LargeCommunity> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::refresh::{AFI_IPV4, AFI_IPV6};
+    use crate::test_util::{NLRI_V4, NLRI_V6, UpdateBody, v6};
 
     #[test]
     fn test_bgp_addr_v4_to_prefix() {
@@ -653,30 +655,6 @@ mod tests {
     fn test_as_path_extraction_empty() {
         let update = BgpUpdateMessage::new();
         assert!(extract_as_path(&update).is_empty());
-    }
-
-    fn v6(s: &str) -> [u8; 16] {
-        s.parse::<Ipv6Addr>().unwrap().octets()
-    }
-
-    /// Build an UPDATE body with ORIGIN and one MP_REACH_NLRI (SAFI unicast).
-    fn mp_reach_update_body(afi: u16, next_hop: &[u8], nlri: &[u8]) -> Vec<u8> {
-        let mut value = Vec::new();
-        value.extend_from_slice(&afi.to_be_bytes());
-        value.push(1);
-        value.push(next_hop.len() as u8);
-        value.extend_from_slice(next_hop);
-        value.push(0);
-        value.extend_from_slice(nlri);
-
-        let mut attrs = vec![0x40, 1, 1, 0]; // ORIGIN IGP
-        attrs.extend_from_slice(&[0x80, 14, value.len() as u8]);
-        attrs.extend_from_slice(&value);
-
-        let mut body = vec![0, 0];
-        body.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
-        body.extend_from_slice(&attrs);
-        body
     }
 
     /// Decode `body` with zettabgp and the raw next hop parser, as the
@@ -714,15 +692,12 @@ mod tests {
     /// an IPv6 session when extended next hop is not negotiated.
     #[test]
     fn classic_ipv4_routes_over_ipv6_session() {
-        let body = [
-            0, 0, // no withdrawn routes
-            0, 20, // path attributes length
-            0x40, 1, 1, 0, // ORIGIN IGP
-            0x40, 2, 6, 2, 1, 0, 0, 0xfd, 0xe9, // AS_PATH 65001
-            0x40, 3, 4, 172, 30, 42, 20, // NEXT_HOP 172.30.42.20
-            24, 198, 51, 100, // 198.51.100.0/24
-            24, 203, 0, 113, // 203.0.113.0/24
-        ];
+        let body = UpdateBody::new()
+            .aspath(&[65001])
+            .next_hop(&[172, 30, 42, 20])
+            .nlri(&[24, 198, 51, 100]) // 198.51.100.0/24
+            .nlri(&[24, 203, 0, 113]) // 203.0.113.0/24
+            .build();
         for prefix in ["198.51.100.0/24", "203.0.113.0/24"] {
             let routes = process_raw_update(&body, prefix);
             assert_eq!(
@@ -736,7 +711,9 @@ mod tests {
     #[test]
     fn ipv4_route_with_ipv6_next_hop() {
         let next_hop = [v6("2001:db8::1"), v6("fe80::1")].concat();
-        let body = mp_reach_update_body(1, &next_hop, &[24, 192, 0, 2]);
+        let body = UpdateBody::new()
+            .mp_reach(AFI_IPV4, &next_hop, &NLRI_V4)
+            .build();
         let routes = process_raw_update(&body, "192.0.2.0/24");
         assert_eq!(routes[0].next_hop, "2001:db8::1".parse::<IpAddr>().unwrap());
         assert_eq!(
@@ -747,7 +724,9 @@ mod tests {
 
     #[test]
     fn ipv4_route_with_ipv6_link_local_next_hop() {
-        let body = mp_reach_update_body(1, &v6("fe80::1"), &[24, 192, 0, 2]);
+        let body = UpdateBody::new()
+            .mp_reach(AFI_IPV4, &v6("fe80::1"), &NLRI_V4)
+            .build();
         let routes = process_raw_update(&body, "192.0.2.0/24");
         assert_eq!(routes[0].next_hop, "fe80::1".parse::<IpAddr>().unwrap());
         assert_eq!(routes[0].next_hop_link_local, None);
@@ -756,7 +735,9 @@ mod tests {
     #[test]
     fn ipv6_route_with_link_local_only_next_hop() {
         let next_hop = [v6("::"), v6("fe80::1")].concat();
-        let body = mp_reach_update_body(2, &next_hop, &[32, 0x20, 0x01, 0x0d, 0xb8]);
+        let body = UpdateBody::new()
+            .mp_reach(AFI_IPV6, &next_hop, &NLRI_V6)
+            .build();
         let routes = process_raw_update(&body, "2001:db8::/32");
         assert_eq!(routes[0].next_hop, "fe80::1".parse::<IpAddr>().unwrap());
         assert_eq!(routes[0].next_hop_link_local, None);

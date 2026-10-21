@@ -118,42 +118,20 @@ pub fn extended_next_hop_param() -> [u8; 10] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::refresh::{AFI_IPV4, AFI_IPV6};
+    use crate::test_util::{
+        ATTR_FLAG_EXTENDED_LENGTH, ATTR_FLAG_OPTIONAL, NLRI_V4, NLRI_V6, UpdateBody,
+        mp_reach_value, v6,
+    };
 
-    fn v6(s: &str) -> [u8; 16] {
-        s.parse::<Ipv6Addr>().unwrap().octets()
+    /// An UPDATE body with ORIGIN and one MP_REACH_NLRI.
+    fn update_with_mp_reach(afi: u16, next_hop: &[u8], nlri: &[u8]) -> Vec<u8> {
+        UpdateBody::new().mp_reach(afi, next_hop, nlri).build()
     }
-
-    /// Build an UPDATE body with one ORIGIN attribute and one MP_REACH_NLRI.
-    fn update_with_mp_reach(afi: u16, next_hop: &[u8], nlri: &[u8], extended: bool) -> Vec<u8> {
-        let mut value = Vec::new();
-        value.extend_from_slice(&afi.to_be_bytes());
-        value.push(1); // SAFI unicast
-        value.push(next_hop.len() as u8);
-        value.extend_from_slice(next_hop);
-        value.push(0); // reserved
-        value.extend_from_slice(nlri);
-
-        let mut attrs = vec![0x40, 1, 1, 0]; // ORIGIN IGP
-        if extended {
-            attrs.extend_from_slice(&[0x80 | ATTR_FLAG_EXTENDED_LENGTH, ATTR_TYPE_MP_REACH_NLRI]);
-            attrs.extend_from_slice(&(value.len() as u16).to_be_bytes());
-        } else {
-            attrs.extend_from_slice(&[0x80, ATTR_TYPE_MP_REACH_NLRI, value.len() as u8]);
-        }
-        attrs.extend_from_slice(&value);
-
-        let mut body = vec![0, 0]; // no withdrawn routes
-        body.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
-        body.extend_from_slice(&attrs);
-        body
-    }
-
-    const NLRI_V4: [u8; 4] = [24, 192, 0, 2];
-    const NLRI_V6: [u8; 5] = [32, 0x20, 0x01, 0x0d, 0xb8];
 
     #[test]
     fn ipv4_route_with_ipv6_global_next_hop() {
-        let body = update_with_mp_reach(1, &v6("2001:db8::1"), &NLRI_V4, false);
+        let body = update_with_mp_reach(AFI_IPV4, &v6("2001:db8::1"), &NLRI_V4);
         assert_eq!(
             parse_mp_reach_next_hop(&body),
             Some(MpNextHop {
@@ -165,7 +143,7 @@ mod tests {
 
     #[test]
     fn ipv4_route_with_ipv6_link_local_next_hop() {
-        let body = update_with_mp_reach(1, &v6("fe80::1"), &NLRI_V4, false);
+        let body = update_with_mp_reach(AFI_IPV4, &v6("fe80::1"), &NLRI_V4);
         assert_eq!(
             parse_mp_reach_next_hop(&body),
             Some(MpNextHop {
@@ -178,7 +156,7 @@ mod tests {
     #[test]
     fn ipv4_route_with_global_and_link_local_next_hop() {
         let next_hop = [v6("2001:db8::1"), v6("fe80::1")].concat();
-        let body = update_with_mp_reach(1, &next_hop, &NLRI_V4, false);
+        let body = update_with_mp_reach(AFI_IPV4, &next_hop, &NLRI_V4);
         assert_eq!(
             parse_mp_reach_next_hop(&body),
             Some(MpNextHop {
@@ -190,7 +168,7 @@ mod tests {
 
     #[test]
     fn ipv4_route_with_ipv4_next_hop() {
-        let body = update_with_mp_reach(1, &[192, 0, 2, 1], &NLRI_V4, false);
+        let body = update_with_mp_reach(AFI_IPV4, &[192, 0, 2, 1], &NLRI_V4);
         assert_eq!(
             parse_mp_reach_next_hop(&body),
             Some(MpNextHop {
@@ -203,7 +181,14 @@ mod tests {
     #[test]
     fn ipv6_route_with_global_and_link_local_next_hop() {
         let next_hop = [v6("2001:db8::1"), v6("fe80::1")].concat();
-        let body = update_with_mp_reach(2, &next_hop, &NLRI_V6, true);
+        // MP_REACH_NLRI with a 2-byte attribute length.
+        let body = UpdateBody::new()
+            .attr(
+                ATTR_FLAG_OPTIONAL | ATTR_FLAG_EXTENDED_LENGTH,
+                ATTR_TYPE_MP_REACH_NLRI,
+                &mp_reach_value(AFI_IPV6, &next_hop, &NLRI_V6),
+            )
+            .build();
         assert_eq!(
             parse_mp_reach_next_hop(&body),
             Some(MpNextHop {
@@ -216,7 +201,7 @@ mod tests {
     #[test]
     fn ipv6_route_with_unspecified_global_next_hop() {
         let next_hop = [v6("::"), v6("fe80::1")].concat();
-        let body = update_with_mp_reach(2, &next_hop, &NLRI_V6, false);
+        let body = update_with_mp_reach(AFI_IPV6, &next_hop, &NLRI_V6);
         assert_eq!(
             parse_mp_reach_next_hop(&body),
             Some(MpNextHop {
@@ -229,7 +214,7 @@ mod tests {
     #[test]
     fn ipv6_route_with_link_local_twice() {
         let next_hop = [v6("fe80::1"), v6("fe80::1")].concat();
-        let body = update_with_mp_reach(2, &next_hop, &NLRI_V6, false);
+        let body = update_with_mp_reach(AFI_IPV6, &next_hop, &NLRI_V6);
         assert_eq!(
             parse_mp_reach_next_hop(&body),
             Some(MpNextHop {
@@ -241,9 +226,11 @@ mod tests {
 
     #[test]
     fn next_hop_after_withdrawn_routes() {
-        let mut body = update_with_mp_reach(2, &v6("2001:db8::1"), &NLRI_V6, false);
-        // Insert one withdrawn IPv4 route (10.0.0.0/8) before the attributes.
-        body.splice(0..2, [0, 2, 8, 10]);
+        // One withdrawn IPv4 route (10.0.0.0/8) before the attributes.
+        let body = UpdateBody::new()
+            .withdrawn(&[8, 10])
+            .mp_reach(AFI_IPV6, &v6("2001:db8::1"), &NLRI_V6)
+            .build();
         assert_eq!(
             parse_mp_reach_next_hop(&body).map(|nh| nh.address),
             Some("2001:db8::1".parse().unwrap())
@@ -252,20 +239,19 @@ mod tests {
 
     #[test]
     fn no_mp_reach_attribute() {
-        // ORIGIN only, then one IPv4 NLRI.
-        let body = [0, 0, 0, 4, 0x40, 1, 1, 0, 24, 192, 0, 2];
+        let body = UpdateBody::new().nlri(&NLRI_V4).build();
         assert_eq!(parse_mp_reach_next_hop(&body), None);
     }
 
     #[test]
     fn unsupported_next_hop_length() {
-        let body = update_with_mp_reach(1, &[0; 12], &NLRI_V4, false);
+        let body = update_with_mp_reach(AFI_IPV4, &[0; 12], &NLRI_V4);
         assert_eq!(parse_mp_reach_next_hop(&body), None);
     }
 
     #[test]
     fn truncated_body() {
-        let body = update_with_mp_reach(2, &v6("2001:db8::1"), &NLRI_V6, false);
+        let body = update_with_mp_reach(AFI_IPV6, &v6("2001:db8::1"), &NLRI_V6);
         for len in 0..body.len() {
             assert_eq!(parse_mp_reach_next_hop(&body[..len]), None, "length {len}");
         }
