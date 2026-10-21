@@ -202,6 +202,8 @@ pub async fn send_open(
 
 /// Offset of the Optional Parameters Length field in an OPEN body.
 const OPEN_OPT_PARAMS_LEN_OFFSET: usize = 9;
+/// Size of an OPEN body before the optional parameters.
+const OPEN_FIXED_SIZE: usize = 10;
 
 /// Encode an OPEN message with `extra_params` after the zettabgp
 /// capabilities. Returns the length of the full message in `buf`.
@@ -214,17 +216,17 @@ fn encode_open(
     let body = &mut buf[BGP_HEADER_SIZE..];
     let mut body_len = open.encode_to(params, body)?;
 
-    if !extra_params.is_empty() {
-        let opt_params_len = body[OPEN_OPT_PARAMS_LEN_OFFSET] as usize + extra_params.len();
-        let opt_params_len = u8::try_from(opt_params_len).map_err(|_| {
-            BgpSessionError::Protocol(format!(
-                "OPEN optional parameters too long: {opt_params_len} bytes"
-            ))
-        })?;
-        body[OPEN_OPT_PARAMS_LEN_OFFSET] = opt_params_len;
-        body[body_len..body_len + extra_params.len()].copy_from_slice(extra_params);
-        body_len += extra_params.len();
-    }
+    // zettabgp writes the length with a cast to u8, which wraps above 255.
+    // Compute it again from the encoded size.
+    let opt_params_len = body_len - OPEN_FIXED_SIZE + extra_params.len();
+    let opt_params_len = u8::try_from(opt_params_len).map_err(|_| {
+        BgpSessionError::Protocol(format!(
+            "OPEN optional parameters too long: {opt_params_len} bytes"
+        ))
+    })?;
+    body[OPEN_OPT_PARAMS_LEN_OFFSET] = opt_params_len;
+    body[body_len..body_len + extra_params.len()].copy_from_slice(extra_params);
+    body_len += extra_params.len();
 
     Ok(params.prepare_message_buf(buf, BgpMessageType::Open, body_len)?)
 }
@@ -355,6 +357,60 @@ mod tests {
             encode_open(&params, &extra, &mut buf),
             Err(BgpSessionError::Protocol(_))
         ));
+    }
+
+    /// Session parameters with `count` Route Refresh capabilities. zettabgp
+    /// puts each one in its own optional parameter of 4 bytes.
+    fn params_with_route_refresh_caps(count: usize) -> BgpSessionParams {
+        BgpSessionParams::new(
+            65000,
+            90,
+            BgpTransportMode::IPv4,
+            std::net::Ipv4Addr::new(192, 0, 2, 1),
+            vec![BgpCapability::CapRR; count],
+        )
+    }
+
+    /// zettabgp writes the Optional Parameters Length with a cast to u8:
+    /// for 260 bytes of capabilities, it writes 4.
+    #[test]
+    fn encode_open_rejects_capabilities_longer_than_255_bytes() {
+        let params = params_with_route_refresh_caps(65);
+        let mut buf = [0u8; BGP_MAX_MSG_SIZE];
+        let extra = crate::nexthop::extended_next_hop_param();
+        for extra in [&extra[..], &[]] {
+            assert!(
+                matches!(
+                    encode_open(&params, extra, &mut buf),
+                    Err(BgpSessionError::Protocol(_))
+                ),
+                "{} bytes of extra parameters",
+                extra.len()
+            );
+        }
+    }
+
+    #[test]
+    fn encode_open_rejects_capabilities_longer_than_255_bytes_with_extra_params() {
+        // 248 bytes of capabilities and 10 bytes of extra parameters.
+        let params = params_with_route_refresh_caps(62);
+        let mut buf = [0u8; BGP_MAX_MSG_SIZE];
+        let extra = crate::nexthop::extended_next_hop_param();
+        assert!(matches!(
+            encode_open(&params, &extra, &mut buf),
+            Err(BgpSessionError::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn encode_open_accepts_optional_params_up_to_255_bytes() {
+        // 244 bytes of capabilities and 10 bytes of extra parameters.
+        let params = params_with_route_refresh_caps(61);
+        let mut buf = [0u8; BGP_MAX_MSG_SIZE];
+        let extra = crate::nexthop::extended_next_hop_param();
+        let total_len = encode_open(&params, &extra, &mut buf).unwrap();
+        assert_eq!(buf[BGP_HEADER_SIZE + OPEN_OPT_PARAMS_LEN_OFFSET], 254);
+        assert_eq!(total_len, BGP_HEADER_SIZE + 10 + 254);
     }
 
     #[test]
