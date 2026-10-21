@@ -124,6 +124,32 @@ impl BgpRoute {
     }
 }
 
+/// Returns true for an IPv6 link-local unicast address (fe80::/10).
+pub fn is_link_local(addr: &IpAddr) -> bool {
+    matches!(addr, IpAddr::V6(v6) if v6.is_unicast_link_local())
+}
+
+/// Replace a link-local address with `::`, for `hide_peer_addresses`. On a
+/// session over link-local addresses, the link-local next hop of a route is
+/// the address of the peer.
+pub fn mask_link_local(addr: IpAddr) -> IpAddr {
+    if is_link_local(&addr) {
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+    } else {
+        addr
+    }
+}
+
+impl BgpRoute {
+    /// Replace the link-local next hops with `::` (see [`mask_link_local`]).
+    pub fn mask_link_local_next_hops(&mut self) {
+        self.next_hop = mask_link_local(self.next_hop);
+        if self.next_hop_link_local.is_some() {
+            self.next_hop_link_local = Some(Ipv6Addr::UNSPECIFIED);
+        }
+    }
+}
+
 impl fmt::Display for Community {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.asn, self.value)
@@ -170,6 +196,23 @@ impl fmt::Display for Origin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_link_local_addresses() {
+        for (addr, masked) in [
+            ("fe80::2", "::"),
+            ("febf::1", "::"),
+            ("fec0::1", "fec0::1"),
+            ("2001:db8::1", "2001:db8::1"),
+            ("192.0.2.1", "192.0.2.1"),
+        ] {
+            assert_eq!(
+                mask_link_local(addr.parse().unwrap()),
+                masked.parse::<IpAddr>().unwrap(),
+                "{addr}"
+            );
+        }
+    }
 
     #[test]
     fn derive_origin_as_from_sequence() {

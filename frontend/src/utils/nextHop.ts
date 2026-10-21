@@ -1,4 +1,5 @@
 import type { BgpRoute } from "../api/types";
+import { isHiddenAddress } from "./hiddenAddress";
 
 /** Returns true for an IPv6 link-local address (fe80::/10). */
 export function isLinkLocal(addr: string): boolean {
@@ -25,7 +26,8 @@ export function describeNextHop(
 
   let type: string;
   if (!ipv6NextHop) type = "IPv4";
-  else if (isLinkLocal(route.next_hop)) type = "IPv6 link-local";
+  // The server hides only link-local next hops (hide_peer_addresses).
+  else if (isLinkLocal(route.next_hop) || isHiddenAddress(route.next_hop)) type = "IPv6 link-local";
   else if (route.next_hop_link_local) type = "IPv6 global + link-local";
   else type = "IPv6 global";
 

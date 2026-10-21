@@ -8,7 +8,7 @@ use rayon::prelude::*;
 
 use crate::peer::PeerId;
 use crate::prefix::Prefix;
-use crate::route::{BgpRoute, Origin};
+use crate::route::{self, BgpRoute, Origin};
 
 /// Numeric comparison for MED and local-pref filters.
 #[derive(Debug, PartialEq)]
@@ -75,6 +75,27 @@ enum SearchFilter<'a> {
     /// Match routes whose next hop or link-local next hop is in this network
     /// (e.g. "nexthop:2001:db8::1", "nexthop:fe80::/10").
     NextHop(IpNet),
+}
+
+/// The next hops that a `nexthop:` search can match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextHopSearch {
+    /// All next hops.
+    All,
+    /// Only the next hops that are not link-local. The API uses it when
+    /// `hide_peer_addresses` hides the link-local next hops.
+    NotLinkLocal,
+}
+
+impl NextHopSearch {
+    /// Returns true when a next hop or a link-local next hop of `route` is
+    /// in `net`.
+    fn matches(self, route: &BgpRoute, net: &IpNet) -> bool {
+        std::iter::once(route.next_hop)
+            .chain(route.next_hop_link_local.map(IpAddr::V6))
+            .filter(|addr| self == Self::All || !route::is_link_local(addr))
+            .any(|addr| net.contains(&addr))
+    }
 }
 
 /// Known structured filter keywords (lowercase).
@@ -361,25 +382,29 @@ impl PeerRib {
     }
 
     /// Paginate IPv4 routes, optionally filtering by prefix search string.
+    /// `next_hops` sets the next hops that a `nexthop:` filter can match.
     /// Returns (page_data, total_count) — only clones the requested page.
     pub fn paginate_ipv4(
         &self,
         page: usize,
         per_page: usize,
         search: Option<&str>,
+        next_hops: NextHopSearch,
     ) -> (Vec<BgpRoute>, usize) {
-        Self::paginate_trie(&self.ipv4, page, per_page, search)
+        Self::paginate_trie(&self.ipv4, page, per_page, search, next_hops)
     }
 
     /// Paginate IPv6 routes, optionally filtering by prefix search string.
+    /// `next_hops` sets the next hops that a `nexthop:` filter can match.
     /// Returns (page_data, total_count) — only clones the requested page.
     pub fn paginate_ipv6(
         &self,
         page: usize,
         per_page: usize,
         search: Option<&str>,
+        next_hops: NextHopSearch,
     ) -> (Vec<BgpRoute>, usize) {
-        Self::paginate_trie(&self.ipv6, page, per_page, search)
+        Self::paginate_trie(&self.ipv6, page, per_page, search, next_hops)
     }
 
     fn paginate_trie<P>(
@@ -387,6 +412,7 @@ impl PeerRib {
         page: usize,
         per_page: usize,
         search: Option<&str>,
+        next_hops: NextHopSearch,
     ) -> (Vec<BgpRoute>, usize)
     where
         P: prefix_trie::Prefix + std::fmt::Display,
@@ -440,12 +466,7 @@ impl PeerRib {
                             SearchFilter::LocalPref(cmp) => {
                                 route.local_pref.is_some_and(|lp| cmp.matches(lp))
                             }
-                            SearchFilter::NextHop(net) => {
-                                net.contains(&route.next_hop)
-                                    || route
-                                        .next_hop_link_local
-                                        .is_some_and(|ll| net.contains(&IpAddr::V6(ll)))
-                            }
+                            SearchFilter::NextHop(net) => next_hops.matches(route, net),
                         })
                     })
                 })
@@ -1278,7 +1299,7 @@ mod tests {
         rib.insert(make_route("10.0.0.0/24", "10.0.0.1", vec![65000, 65010]));
         rib.insert(make_route("192.168.1.0/24", "10.0.0.1", vec![65000, 65020]));
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("AS65010"));
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("AS65010"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data.len(), 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.0.0/24");
@@ -1290,7 +1311,7 @@ mod tests {
         rib.insert(make_route("10.0.0.0/24", "10.0.0.1", vec![65000, 65010]));
         rib.insert(make_route("192.168.1.0/24", "10.0.0.1", vec![65000, 65020]));
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("65000 65010"));
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("65000 65010"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data.len(), 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.0.0/24");
@@ -1302,7 +1323,7 @@ mod tests {
         rib.insert(make_route("10.0.0.0/24", "10.0.0.1", vec![65000]));
         rib.insert(make_route("192.168.1.0/24", "10.0.0.1", vec![65000]));
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("192.168"));
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("192.168"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data.len(), 1);
         assert_eq!(data[0].prefix.to_string(), "192.168.1.0/24");
@@ -1373,7 +1394,8 @@ mod tests {
             vec![],
         ));
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("community:65000:100"));
+        let (data, total) =
+            rib.paginate_ipv4(1, 100, Some("community:65000:100"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.0.0/24");
     }
@@ -1409,7 +1431,8 @@ mod tests {
         ));
 
         // Wildcard value: any community from ASN 65000
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("community:65000:*"));
+        let (data, total) =
+            rib.paginate_ipv4(1, 100, Some("community:65000:*"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.0.0/24");
     }
@@ -1438,7 +1461,8 @@ mod tests {
             vec![],
         ));
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("origin:incomplete"));
+        let (data, total) =
+            rib.paginate_ipv4(1, 100, Some("origin:incomplete"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.1.0/24");
     }
@@ -1467,7 +1491,7 @@ mod tests {
             vec![],
         ));
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("med:>100"));
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("med:>100"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.1.0/24");
     }
@@ -1496,7 +1520,7 @@ mod tests {
             vec![],
         ));
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("localpref:>=200"));
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("localpref:>=200"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.1.0/24");
     }
@@ -1511,21 +1535,37 @@ mod tests {
         route.next_hop_link_local = Some("fe80::2".parse().unwrap());
         rib.insert(route);
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("nexthop:10.0.0.1"));
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("nexthop:10.0.0.1"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.0.0/24");
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("nexthop:2001:db8::1"));
+        let (data, total) =
+            rib.paginate_ipv4(1, 100, Some("nexthop:2001:db8::1"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.1.0/24");
 
-        let (_, total) = rib.paginate_ipv4(1, 100, Some("nexthop:2001:db8::/32"));
+        let (_, total) =
+            rib.paginate_ipv4(1, 100, Some("nexthop:2001:db8::/32"), NextHopSearch::All);
         assert_eq!(total, 2);
 
         // The link-local next hop matches too
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("nexthop:fe80::/10"));
+        let (data, total) =
+            rib.paginate_ipv4(1, 100, Some("nexthop:fe80::/10"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.2.0/24");
+
+        // Without link-local next hops, only the global next hop matches
+        let (_, total) = rib.paginate_ipv4(
+            1,
+            100,
+            Some("nexthop:fe80::/10"),
+            NextHopSearch::NotLinkLocal,
+        );
+        assert_eq!(total, 0);
+        let (data, total) =
+            rib.paginate_ipv4(1, 100, Some("nexthop:::/0"), NextHopSearch::NotLinkLocal);
+        assert_eq!(total, 2);
+        assert!(data.iter().all(|r| r.next_hop.is_ipv6()));
     }
 
     #[test]
@@ -1559,7 +1599,12 @@ mod tests {
         ));
 
         // Both have community:65000:100, but only first has localpref>=200
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("community:65000:100 localpref:>=200"));
+        let (data, total) = rib.paginate_ipv4(
+            1,
+            100,
+            Some("community:65000:100 localpref:>=200"),
+            NextHopSearch::All,
+        );
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.0.0/24");
     }
@@ -1579,7 +1624,7 @@ mod tests {
         ));
 
         // med:0 should not match routes with no MED
-        let (_, total) = rib.paginate_ipv4(1, 100, Some("med:0"));
+        let (_, total) = rib.paginate_ipv4(1, 100, Some("med:0"), NextHopSearch::All);
         assert_eq!(total, 0);
     }
 
@@ -1615,7 +1660,7 @@ mod tests {
             }],
         ));
 
-        let (data, total) = rib.paginate_ipv4(1, 100, Some("lc:65000:1:2"));
+        let (data, total) = rib.paginate_ipv4(1, 100, Some("lc:65000:1:2"), NextHopSearch::All);
         assert_eq!(total, 1);
         assert_eq!(data[0].prefix.to_string(), "10.0.0.0/24");
     }

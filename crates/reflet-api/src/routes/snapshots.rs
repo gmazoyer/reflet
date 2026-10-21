@@ -87,6 +87,7 @@ async fn get_snapshot_routes(
     let page = params.page.unwrap_or(1).max(1);
     let per_page = params.per_page.unwrap_or(100).clamp(1, 10000);
     let search = params.search.clone();
+    let next_hops = state.next_hop_search();
 
     let (data, total) = tokio::task::spawn_blocking({
         let id = id.clone();
@@ -101,9 +102,9 @@ async fn get_snapshot_routes(
             })?;
 
             Ok(if ipv4 {
-                rib.paginate_ipv4(page, per_page, search.as_deref())
+                rib.paginate_ipv4(page, per_page, search.as_deref(), next_hops)
             } else {
-                rib.paginate_ipv6(page, per_page, search.as_deref())
+                rib.paginate_ipv6(page, per_page, search.as_deref(), next_hops)
             })
         }
     })

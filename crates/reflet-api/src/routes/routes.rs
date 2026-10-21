@@ -82,10 +82,11 @@ fn get_peer_routes(
         let rib = rib_arc
             .read()
             .map_err(|e| ApiError::Internal(format!("failed to read RIB: {e}")))?;
+        let next_hops = state.next_hop_search();
         if ipv4 {
-            rib.paginate_ipv4(page, per_page, params.search.as_deref())
+            rib.paginate_ipv4(page, per_page, params.search.as_deref(), next_hops)
         } else {
-            rib.paginate_ipv6(page, per_page, params.search.as_deref())
+            rib.paginate_ipv6(page, per_page, params.search.as_deref(), next_hops)
         }
     } else {
         (Vec::new(), 0)

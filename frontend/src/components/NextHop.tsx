@@ -1,4 +1,5 @@
 import type { BgpRoute } from "../api/types";
+import { displayAddress } from "../utils/hiddenAddress";
 import { describeNextHop } from "../utils/nextHop";
 import Tooltip from "./Tooltip";
 
@@ -11,7 +12,7 @@ interface NextHopProps {
 /** The next hop of a route, with its link-local next hop when there is one. */
 export default function NextHop({ route, showDetails }: NextHopProps) {
   const info = describeNextHop(route);
-  const address = <span className={showDetails ? undefined : "cursor-help"}>{route.next_hop}</span>;
+  const address = <span className={showDetails ? undefined : "cursor-help"}>{displayAddress(route.next_hop)}</span>;
 
   return (
     <div className="font-mono text-sm text-gray-600 dark:text-gray-400">
@@ -33,7 +34,7 @@ export default function NextHop({ route, showDetails }: NextHopProps) {
         {route.next_hop_link_local && (
           <Tooltip content="Link-local next hop">
             <span className="cursor-help text-gray-400 dark:text-gray-500">
-              {route.next_hop_link_local}
+              {displayAddress(route.next_hop_link_local)}
             </span>
           </Tooltip>
         )}

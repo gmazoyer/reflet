@@ -6,10 +6,10 @@ use std::sync::{Arc, RwLock};
 use reflet_core::asn::AsnStore;
 use reflet_core::community::CommunityStore;
 use reflet_core::config::BgpConfig;
-use reflet_core::event_log::EventLog;
+use reflet_core::event_log::{EventLog, RouteEvent};
 use reflet_core::peer::{PeerInfo, PeerState};
-use reflet_core::rib::RibStore;
-use reflet_core::route::BgpRoute;
+use reflet_core::rib::{NextHopSearch, RibStore};
+use reflet_core::route::{self, BgpRoute};
 use reflet_core::rpki::RpkiStore;
 use tokio::sync::mpsc;
 
@@ -137,9 +137,13 @@ impl AppState {
             .map_err(|_| ApiError::Internal("failed to send refresh command".into()))
     }
 
+    fn hides_peer_addresses(&self) -> bool {
+        *self.hide_peer_addresses.read().unwrap()
+    }
+
     /// Mask sensitive IP fields on a peer info when hiding is enabled.
     fn sanitize_peer(&self, mut peer: PeerInfo) -> PeerInfo {
-        if *self.hide_peer_addresses.read().unwrap() {
+        if self.hides_peer_addresses() {
             peer.address = match peer.address {
                 IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
                 IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
@@ -149,10 +153,33 @@ impl AppState {
         peer
     }
 
-    /// Apply address-hiding policy to a route (currently a no-op;
-    /// next-hop is intentionally left visible).
-    pub fn sanitize_route(&self, route: BgpRoute) -> BgpRoute {
+    /// Apply the address-hiding policy to a route. Global next hops stay
+    /// visible. Link-local next hops become `::`, because on a session over
+    /// link-local addresses they are the address of the peer.
+    pub fn sanitize_route(&self, mut route: BgpRoute) -> BgpRoute {
+        if self.hides_peer_addresses() {
+            route.mask_link_local_next_hops();
+        }
         route
+    }
+
+    /// Apply the address-hiding policy of [`Self::sanitize_route`] to a
+    /// route event.
+    pub fn sanitize_event(&self, mut event: RouteEvent) -> RouteEvent {
+        if self.hides_peer_addresses() {
+            event.next_hop = event.next_hop.map(route::mask_link_local);
+        }
+        event
+    }
+
+    /// The next hops that a `nexthop:` search can match. A search must not
+    /// find a next hop that the address-hiding policy hides.
+    pub fn next_hop_search(&self) -> NextHopSearch {
+        if self.hides_peer_addresses() {
+            NextHopSearch::NotLinkLocal
+        } else {
+            NextHopSearch::All
+        }
     }
 
     /// Annotate a route with its RPKI validation status.

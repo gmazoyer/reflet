@@ -44,6 +44,19 @@ describe("describeNextHop", () => {
     expect(info.type).toBe("IPv6 link-local (RFC 8950)");
   });
 
+  it("describes a link-local next hop that the server hides", () => {
+    expect(describeNextHop({ prefix: "2001:db8::/32", next_hop: "::" }).type).toBe(
+      "IPv6 link-local",
+    );
+    expect(
+      describeNextHop({
+        prefix: "10.0.0.0/24",
+        next_hop: "2001:db8::1",
+        next_hop_link_local: "::",
+      }).type,
+    ).toBe("IPv6 global + link-local (RFC 8950)");
+  });
+
   it("describes IPv6 routes", () => {
     expect(describeNextHop({ prefix: "2001:db8::/32", next_hop: "2001:db8::1" })).toEqual({
       afiSafi: "IPv6 unicast (AFI 2, SAFI 1)",
