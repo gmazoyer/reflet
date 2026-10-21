@@ -17,17 +17,26 @@ use reflet_core::rib::RibStore;
 use crate::codec::{self, BGP_MAX_MSG_SIZE, MessageReader, RawMessageType};
 use crate::error::{BgpSessionError, MessageHeaderError};
 use crate::graceful_restart::{self, PeerGrInfo};
-use crate::nexthop;
 use crate::refresh::{
     AFI_IPV4, AFI_IPV6, CommandRx, ROUTE_REFRESH_BORR, ROUTE_REFRESH_EORR, ROUTE_REFRESH_NORMAL,
     RouteRefreshState, SAFI_UNICAST,
 };
 use crate::update;
 
+/// What Reflet announces in its OPEN to one peer.
+#[derive(Clone)]
+pub struct LocalParams {
+    /// Session parameters, with the capabilities that zettabgp encodes.
+    pub session: BgpSessionParams,
+    /// Encoded OPEN optional parameters that zettabgp cannot encode, such
+    /// as the Extended Next Hop capability.
+    pub open_extra_params: Vec<u8>,
+}
+
 /// A BGP session managing the FSM for a single peer.
 pub struct BgpSession {
     peer_config: PeerConfig,
-    local_params: BgpSessionParams,
+    local_params: LocalParams,
     rib_store: RibStore,
     peer_info: Arc<RwLock<PeerInfo>>,
     shutdown_rx: watch::Receiver<bool>,
@@ -42,7 +51,7 @@ impl BgpSession {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         peer_config: PeerConfig,
-        local_params: BgpSessionParams,
+        local_params: LocalParams,
         rib_store: RibStore,
         peer_info: Arc<RwLock<PeerInfo>>,
         shutdown_rx: watch::Receiver<bool>,
@@ -71,7 +80,7 @@ impl BgpSession {
         let peer_id = self.peer_id();
         let mut buf = vec![0u8; BGP_MAX_MSG_SIZE];
         let mut reader = MessageReader::default();
-        let mut params = self.local_params.clone();
+        let mut params = self.local_params.session.clone();
 
         info!(peer = %peer_id, "BGP session starting");
 
@@ -79,7 +88,13 @@ impl BgpSession {
         self.set_state(PeerState::Connect);
 
         // Send OPEN
-        codec::send_open(&mut stream, &params, &self.open_extra_params(), &mut buf).await?;
+        codec::send_open(
+            &mut stream,
+            &params,
+            &self.local_params.open_extra_params,
+            &mut buf,
+        )
+        .await?;
         self.set_state(PeerState::OpenSent);
         debug!(peer = %peer_id, "sent OPEN message");
 
@@ -494,20 +509,6 @@ impl BgpSession {
 
     fn peer_id(&self) -> PeerId {
         format!("{}", self.peer_config.address)
-    }
-
-    /// OPEN optional parameters that zettabgp cannot encode.
-    fn open_extra_params(&self) -> Vec<u8> {
-        let mut extra = Vec::new();
-        if self.peer_config.extended_next_hop
-            && self
-                .peer_config
-                .families
-                .contains(&AddressFamily::Ipv4Unicast)
-        {
-            extra.extend_from_slice(&nexthop::extended_next_hop_param());
-        }
-        extra
     }
 
     fn set_state(&self, state: PeerState) {

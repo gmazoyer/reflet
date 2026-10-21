@@ -14,6 +14,8 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Range;
 
+use crate::refresh::{AFI_IPV4, AFI_IPV6, SAFI_UNICAST};
+
 const ATTR_FLAG_EXTENDED_LENGTH: u8 = 0x10;
 const ATTR_TYPE_NEXT_HOP: u8 = 3;
 const ATTR_TYPE_MP_REACH_NLRI: u8 = 14;
@@ -183,17 +185,20 @@ fn read_ipv6(buf: &[u8]) -> Option<Ipv6Addr> {
 /// The Extended Next Hop Encoding capability (RFC 8950) for IPv4 unicast
 /// routes with an IPv6 next hop, encoded as an OPEN optional parameter.
 pub fn extended_next_hop_param() -> [u8; 10] {
+    let [nlri_afi_hi, nlri_afi_lo] = AFI_IPV4.to_be_bytes();
+    let [nlri_safi_hi, nlri_safi_lo] = u16::from(SAFI_UNICAST).to_be_bytes();
+    let [next_hop_afi_hi, next_hop_afi_lo] = AFI_IPV6.to_be_bytes();
     [
         OPT_PARAM_CAPABILITIES,
         8,
         CAP_EXTENDED_NEXT_HOP,
         6,
-        0,
-        1, // NLRI AFI: IPv4
-        0,
-        1, // NLRI SAFI: unicast
-        0,
-        2, // Next hop AFI: IPv6
+        nlri_afi_hi,
+        nlri_afi_lo,
+        nlri_safi_hi,
+        nlri_safi_lo,
+        next_hop_afi_hi,
+        next_hop_afi_lo,
     ]
 }
 
