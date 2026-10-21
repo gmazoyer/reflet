@@ -83,7 +83,7 @@ An array of BGP peer configurations. Each `[[peers]]` entry defines one BGP sess
 | `description` | string | `""` | Longer description shown in the peer list. |
 | `location` | string | *(none)* | Free-text location (city, datacenter, etc.) displayed alongside the peer. |
 | `families` | list of strings | `["ipv4-unicast", "ipv6-unicast"]` | Address families to negotiate. Valid values: `ipv4-unicast`, `ipv6-unicast`. |
-| `extended_next_hop` | boolean | `true` | Announce the Extended Next Hop Encoding capability (RFC 8950) for IPv4 unicast. The peer can then send IPv4 routes with an IPv6 next hop. Without it, the peer does not send these routes. Has no effect when `families` does not include `ipv4-unicast`. |
+| `extended_next_hop` | boolean | `false` | Announce the Extended Next Hop Encoding capability (RFC 8950) for IPv4 unicast. The peer can then send IPv4 routes with an IPv6 next hop. RFC 8950 does not let a peer send these routes without the capability, but Reflet accepts them when a peer does. Has no effect when `families` does not include `ipv4-unicast`. |
 | `snapshot_interval` | integer (u64) | *(none)* | Seconds between RIB snapshots for this peer. Set to `0` or omit to disable. Minimum `60`. Requires a `[snapshots]` section. |
 
 ```toml
