@@ -433,6 +433,21 @@ mod tests {
         }
     }
 
+    /// The classic UPDATE fields are IPv4 on every session. In IPv6 mode,
+    /// zettabgp rejects the 4-byte NEXT_HOP that BIRD sends over IPv6, and
+    /// the session resets.
+    #[test]
+    fn ipv6_peer_reads_classic_fields_as_ipv4() {
+        for address in ["2001:db8::2", "fe80::2", "192.0.2.2"] {
+            let params =
+                speaker().build_session_params(&peer_config(address, &BOTH_FAMILIES, false));
+            assert!(
+                matches!(params.session.peer_mode, BgpTransportMode::IPv4),
+                "{address}"
+            );
+        }
+    }
+
     #[test]
     fn extended_next_hop_capability_in_open() {
         let capability = nexthop::extended_next_hop_param().to_vec();
