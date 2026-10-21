@@ -360,11 +360,7 @@ impl BgpSession {
                             }
 
                             // Normal decode + process (EoR messages decode as empty updates)
-                            let mut update_msg = BgpUpdateMessage::new();
-                            update_msg.decode_from(&params, &buf[..msg_len])?;
-                            // zettabgp decodes some MP_REACH_NLRI next hops wrongly
-                            let mp_next_hop = nexthop::parse_mp_reach_next_hop(&buf[..msg_len]);
-                            update::process_update(&update_msg, mp_next_hop, &params, &peer_id, &rib_arc, has_ipv4, has_ipv6, &self.event_log);
+                            update::decode_and_process(&buf[..msg_len], &params, &peer_id, &rib_arc, has_ipv4, has_ipv6, &self.event_log)?;
 
                             // Update prefix counts
                             if let Ok(rib) = rib_arc.read() {
