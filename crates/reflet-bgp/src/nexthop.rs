@@ -22,7 +22,7 @@ pub struct MpNextHop {
     /// no global address.
     pub address: IpAddr,
     /// The link-local address that follows the global address in a 32-byte
-    /// next hop field.
+    /// next hop field. Always in fe80::/10.
     pub link_local: Option<Ipv6Addr>,
 }
 
@@ -72,6 +72,14 @@ fn decode_next_hop(value: &[u8]) -> Option<MpNextHop> {
         32 => {
             let global = read_ipv6(&next_hop[..16])?;
             let link_local = read_ipv6(&next_hop[16..])?;
+            // RFC 2545 puts a link-local address second. Ignore any other
+            // address there, as FRR does.
+            if !link_local.is_unicast_link_local() {
+                return Some(MpNextHop {
+                    address: IpAddr::V6(global),
+                    link_local: None,
+                });
+            }
             // Some speakers send "::" or the link-local address again in the
             // global field when the interface has no global address.
             if global.is_unspecified() || global == link_local {
@@ -164,6 +172,30 @@ mod tests {
                 link_local: Some("fe80::1".parse().unwrap()),
             })
         );
+    }
+
+    /// RFC 2545: the second address of a 32-byte next hop is link-local.
+    /// Any other second address is ignored, as FRR does.
+    #[test]
+    fn second_address_must_be_link_local() {
+        let cases = [
+            ("2001:db8::1", "::", "2001:db8::1", None),
+            ("2001:db8::1", "2001:db8::2", "2001:db8::1", None),
+            ("2001:db8::1", "fe80::1", "2001:db8::1", Some("fe80::1")),
+            ("::", "2001:db8::2", "::", None),
+        ];
+        for (global, second, address, link_local) in cases {
+            let next_hop = [v6(global), v6(second)].concat();
+            let body = update_with_mp_reach(AFI_IPV4, &next_hop, &NLRI_V4);
+            assert_eq!(
+                parse_mp_reach_next_hop(&body),
+                Some(MpNextHop {
+                    address: address.parse().unwrap(),
+                    link_local: link_local.map(|ll| ll.parse().unwrap()),
+                }),
+                "next hop {global} {second}"
+            );
+        }
     }
 
     #[test]
