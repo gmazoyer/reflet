@@ -299,6 +299,7 @@ fn build_route(
         received_at: *now,
         stale: false,
         rpki_status: None,
+        aspa_status: None,
     }
 }
 

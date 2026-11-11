@@ -117,6 +117,7 @@ fn make_route_with_path_id(
         received_at: Utc::now(),
         stale: false,
         rpki_status: None,
+        aspa_status: None,
     }
 }
 
@@ -639,6 +640,7 @@ fn make_route_with_attrs(
         received_at: Utc::now(),
         stale: false,
         rpki_status: None,
+        aspa_status: None,
     }
 }
 
@@ -1120,7 +1122,8 @@ async fn routes_with_rpki_store_include_status() {
 
     // Create RPKI store with a matching VRP
     let rpki_store =
-        RpkiStore::from_vrps(vec![("10.0.0.0/24".parse::<IpNet>().unwrap(), 65010, 24)]);
+        RpkiStore::from_vrps(vec![("10.0.0.0/24".parse::<IpNet>().unwrap(), 65010, 24)])
+            .with_aspas(vec![(65010, vec![65001])]);
 
     let state = AppState::new(
         rib_store,
@@ -1144,6 +1147,7 @@ async fn routes_with_rpki_store_include_status() {
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     let routes = json["data"].as_array().unwrap();
     assert_eq!(routes[0]["rpki_status"], "valid");
+    assert_eq!(routes[0]["aspa_status"], "valid");
 }
 
 #[tokio::test]
@@ -1155,6 +1159,7 @@ async fn routes_without_rpki_store_omit_status() {
     let routes = json["data"].as_array().unwrap();
     // rpki_status should be absent (None is skipped in serialization)
     assert!(routes[0].get("rpki_status").is_none());
+    assert!(routes[0].get("aspa_status").is_none());
 }
 
 #[tokio::test]
@@ -1187,6 +1192,7 @@ async fn summary_with_rpki_includes_vrp_count() {
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["rpki"]["vrp_count"], 2);
+    assert_eq!(json["rpki"]["aspa_count"], 0);
 }
 
 #[tokio::test]

@@ -24,6 +24,8 @@ pub struct SummaryResponse {
 #[derive(Serialize, ToSchema)]
 pub struct RpkiSummary {
     pub vrp_count: usize,
+    /// Number of customer ASNs with an ASPA. 0 when the validator sends none.
+    pub aspa_count: usize,
 }
 
 /// GET /api/v1/summary
@@ -45,6 +47,7 @@ pub async fn get_summary(State(state): State<AppState>) -> Json<SummaryResponse>
         } else {
             Some(RpkiSummary {
                 vrp_count: store.vrp_count(),
+                aspa_count: store.aspa_count(),
             })
         }
     };

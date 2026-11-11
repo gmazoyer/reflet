@@ -706,6 +706,7 @@ mod tests {
             received_at: Utc::now(),
             stale: false,
             rpki_status: None,
+            aspa_status: None,
         }
     }
 
@@ -1361,6 +1362,7 @@ mod tests {
             received_at: Utc::now(),
             stale: false,
             rpki_status: None,
+            aspa_status: None,
         }
     }
 

@@ -1,17 +1,22 @@
+use std::collections::HashMap;
+
 use ipnet::{IpNet, Ipv4Net, Ipv6Net};
 use prefix_trie::PrefixMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::prefix::Prefix;
+use crate::route::AsPathSegment;
 
-/// RPKI validation status for a BGP route (RFC 6811).
+/// RPKI status of a BGP route: route origin validation (RFC 6811, where
+/// `Unknown` is the NotFound state) or ASPA verification
+/// (draft-ietf-sidrops-aspa-verification).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RpkiStatus {
     Valid,
     Invalid,
-    NotFound,
+    Unknown,
 }
 
 /// A Validated ROA Payload.
@@ -25,6 +30,8 @@ pub struct RpkiStore {
     ipv4: PrefixMap<Ipv4Net, Vec<Vrp>>,
     ipv6: PrefixMap<Ipv6Net, Vec<Vrp>>,
     vrp_count: usize,
+    /// Customer ASN -> provider ASNs.
+    aspas: HashMap<u32, Vec<u32>>,
 }
 
 impl RpkiStore {
@@ -34,6 +41,7 @@ impl RpkiStore {
             ipv4: PrefixMap::new(),
             ipv6: PrefixMap::new(),
             vrp_count: 0,
+            aspas: HashMap::new(),
         }
     }
 
@@ -58,7 +66,60 @@ impl RpkiStore {
             ipv4,
             ipv6,
             vrp_count,
+            aspas: HashMap::new(),
         }
+    }
+
+    /// Add ASPAs: (customer ASN, provider ASNs). Entries for the same
+    /// customer are merged.
+    pub fn with_aspas(mut self, aspas: Vec<(u32, Vec<u32>)>) -> Self {
+        for (customer, providers) in aspas {
+            self.aspas.entry(customer).or_default().extend(providers);
+        }
+        self
+    }
+
+    /// Verify an AS path against stored ASPAs with the downstream algorithm
+    /// of draft-ietf-sidrops-aspa-verification. That algorithm accepts one
+    /// up-ramp followed by one down-ramp, so it fits a looking glass that
+    /// does not know its relationship with each peer.
+    pub fn validate_aspa(&self, as_path: &[AsPathSegment]) -> RpkiStatus {
+        let mut path = Vec::new();
+        for segment in as_path {
+            match segment {
+                AsPathSegment::Sequence(asns) => path.extend(asns),
+                AsPathSegment::Set(_) => return RpkiStatus::Invalid,
+            }
+        }
+        path.dedup(); // remove prepends
+        path.reverse(); // origin first
+        let n = path.len();
+
+        // Some(true): provider, Some(false): not a provider,
+        // None: the customer has no ASPA.
+        let hop =
+            |customer: u32, provider: u32| self.aspas.get(&customer).map(|p| p.contains(&provider));
+        let up: Vec<_> = path.windows(2).map(|w| hop(w[0], w[1])).collect();
+        let down: Vec<_> = path.windows(2).rev().map(|w| hop(w[1], w[0])).collect();
+        // Length of a ramp: it ends at the first hop that matches `stop`.
+        let ramp = |hops: &[Option<bool>], stop: fn(&Option<bool>) -> bool| {
+            hops.iter().position(stop).map_or(n, |i| i + 1)
+        };
+
+        let max = ramp(&up, |h| *h == Some(false)) + ramp(&down, |h| *h == Some(false));
+        let min = ramp(&up, |h| *h != Some(true)) + ramp(&down, |h| *h != Some(true));
+        if max < n {
+            RpkiStatus::Invalid
+        } else if min < n {
+            RpkiStatus::Unknown
+        } else {
+            RpkiStatus::Valid
+        }
+    }
+
+    /// Number of customer ASNs with an ASPA in the store.
+    pub fn aspa_count(&self) -> usize {
+        self.aspas.len()
     }
 
     /// Validate a route against stored VRPs (RFC 6811).
@@ -67,11 +128,11 @@ impl RpkiStore {
     /// 1. Find all VRPs whose prefix covers P/L
     /// 2. Among those where L <= max_length: if any has ASN == X -> Valid
     /// 3. If covering VRPs exist but none match -> Invalid
-    /// 4. If no covering VRPs at all -> NotFound
+    /// 4. If no covering VRPs at all -> Unknown
     pub fn validate(&self, prefix: &Prefix, origin_as: Option<u32>) -> RpkiStatus {
         let origin_as = match origin_as {
             Some(asn) => asn,
-            None => return RpkiStatus::NotFound,
+            None => return RpkiStatus::Unknown,
         };
 
         let prefix_len = prefix.prefix_len();
@@ -99,7 +160,7 @@ impl RpkiStore {
         if has_applicable {
             RpkiStatus::Invalid
         } else {
-            RpkiStatus::NotFound
+            RpkiStatus::Unknown
         }
     }
 
@@ -120,7 +181,7 @@ impl RpkiStore {
         if has_applicable {
             RpkiStatus::Invalid
         } else {
-            RpkiStatus::NotFound
+            RpkiStatus::Unknown
         }
     }
 
@@ -180,21 +241,21 @@ mod tests {
         // /25 exceeds max_length of /24 for the exact ROA
         // but /25 also exceeds max_length /24 for the /16 covering ROA
         let prefix: Prefix = "10.0.0.0/25".parse().unwrap();
-        assert_eq!(store.validate(&prefix, Some(65001)), RpkiStatus::NotFound);
+        assert_eq!(store.validate(&prefix, Some(65001)), RpkiStatus::Unknown);
     }
 
     #[test]
-    fn not_found_no_covering_vrp() {
+    fn unknown_no_covering_vrp() {
         let store = make_store();
         let prefix: Prefix = "192.168.0.0/24".parse().unwrap();
-        assert_eq!(store.validate(&prefix, Some(65001)), RpkiStatus::NotFound);
+        assert_eq!(store.validate(&prefix, Some(65001)), RpkiStatus::Unknown);
     }
 
     #[test]
-    fn not_found_origin_as_none() {
+    fn unknown_origin_as_none() {
         let store = make_store();
         let prefix: Prefix = "10.0.0.0/24".parse().unwrap();
-        assert_eq!(store.validate(&prefix, None), RpkiStatus::NotFound);
+        assert_eq!(store.validate(&prefix, None), RpkiStatus::Unknown);
     }
 
     #[test]
@@ -216,7 +277,7 @@ mod tests {
         let store = make_store();
         // /64 exceeds max_length /48
         let prefix: Prefix = "2001:db8:1::/64".parse().unwrap();
-        assert_eq!(store.validate(&prefix, Some(65001)), RpkiStatus::NotFound);
+        assert_eq!(store.validate(&prefix, Some(65001)), RpkiStatus::Unknown);
     }
 
     #[test]
@@ -225,7 +286,7 @@ mod tests {
         assert!(store.is_empty());
         assert_eq!(store.vrp_count(), 0);
         let prefix: Prefix = "10.0.0.0/24".parse().unwrap();
-        assert_eq!(store.validate(&prefix, Some(65001)), RpkiStatus::NotFound);
+        assert_eq!(store.validate(&prefix, Some(65001)), RpkiStatus::Unknown);
     }
 
     #[test]
@@ -233,6 +294,54 @@ mod tests {
         let store = make_store();
         assert_eq!(store.vrp_count(), 3);
         assert!(!store.is_empty());
+    }
+
+    fn aspa(store: &RpkiStore, path: &[u32]) -> RpkiStatus {
+        store.validate_aspa(&[AsPathSegment::Sequence(path.to_vec())])
+    }
+
+    #[test]
+    fn aspa_validation() {
+        // 65001 and 65003 are customers of 65002. 65003 is also a customer
+        // of 65004. The two entries for 65003 must merge.
+        let store = RpkiStore::empty().with_aspas(vec![
+            (65001, vec![65002]),
+            (65002, vec![65009]),
+            (65003, vec![65002]),
+            (65003, vec![65004]),
+            (65004, vec![65009]),
+        ]);
+        assert_eq!(store.aspa_count(), 4);
+
+        // AS paths have the neighbor first and the origin last.
+        // Up-ramp only, with a prepend.
+        assert_eq!(
+            aspa(&store, &[65009, 65002, 65001, 65001]),
+            RpkiStatus::Valid
+        );
+        // Up-ramp, then down-ramp.
+        assert_eq!(aspa(&store, &[65003, 65002, 65001]), RpkiStatus::Valid);
+        // Valley: 65002 -> customer 65003 -> provider 65004.
+        assert_eq!(
+            aspa(&store, &[65004, 65003, 65002, 65001]),
+            RpkiStatus::Invalid
+        );
+        // 64512 and 64513 have no ASPA.
+        assert_eq!(
+            aspa(&store, &[64513, 64512, 65002, 65001]),
+            RpkiStatus::Unknown
+        );
+        // Short paths are always valid.
+        assert_eq!(aspa(&store, &[64512, 64513]), RpkiStatus::Valid);
+        assert_eq!(aspa(&store, &[]), RpkiStatus::Valid);
+        // AS_SET
+        assert_eq!(
+            store.validate_aspa(&[
+                AsPathSegment::Sequence(vec![65002]),
+                AsPathSegment::Set(vec![65001]),
+            ]),
+            RpkiStatus::Invalid
+        );
     }
 
     #[test]

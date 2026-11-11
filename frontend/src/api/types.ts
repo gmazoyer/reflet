@@ -46,7 +46,7 @@ export interface LargeCommunity {
   local_data2: number;
 }
 
-export type RpkiStatus = "valid" | "invalid" | "not_found";
+export type RpkiStatus = "valid" | "invalid" | "unknown";
 
 export interface BgpRoute {
   prefix: string;
@@ -64,6 +64,7 @@ export interface BgpRoute {
   origin_as: number | null;
   received_at: string;
   rpki_status?: RpkiStatus;
+  aspa_status?: RpkiStatus;
 }
 
 export interface PaginatedRoutes {
@@ -79,6 +80,7 @@ export interface PaginationMeta {
 
 export interface RpkiSummary {
   vrp_count: number;
+  aspa_count: number;
 }
 
 export interface SummaryResponse {

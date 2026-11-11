@@ -9,6 +9,22 @@ use reflet_core::rpki::RpkiStore;
 #[derive(Deserialize)]
 struct RoutinatorResponse {
     roas: Vec<RoutinatorVrp>,
+    /// Absent when the validator does not process ASPA objects.
+    #[serde(default)]
+    aspas: Vec<RoutinatorAspa>,
+}
+
+#[derive(Deserialize)]
+struct RoutinatorAspa {
+    customer: String,
+    providers: Vec<String>,
+}
+
+fn parse_asn(asn: &str) -> Result<u32> {
+    asn.strip_prefix("AS")
+        .unwrap_or(asn)
+        .parse()
+        .with_context(|| format!("invalid ASN {asn:?}"))
 }
 
 #[derive(Deserialize)]
@@ -19,7 +35,7 @@ struct RoutinatorVrp {
     max_length: u8,
 }
 
-/// Fetch VRPs from a Routinator-compatible RPKI validator.
+/// Fetch VRPs and ASPAs from a Routinator-compatible RPKI validator.
 pub async fn fetch(url: &str) -> Result<RpkiStore> {
     let client = reqwest::Client::builder()
         .user_agent("reflet/0.1")
@@ -40,18 +56,27 @@ pub async fn fetch(url: &str) -> Result<RpkiStore> {
 
     let mut vrps = Vec::with_capacity(resp.roas.len());
     for roa in &resp.roas {
-        let asn = roa
-            .asn
-            .strip_prefix("AS")
-            .unwrap_or(&roa.asn)
-            .parse::<u32>()
-            .context("invalid ASN in VRP")?;
+        let asn = parse_asn(&roa.asn)?;
         let prefix = roa.prefix.parse().context("invalid prefix in VRP")?;
         vrps.push((prefix, asn, roa.max_length));
     }
 
-    let store = RpkiStore::from_vrps(vrps);
-    info!(vrps = store.vrp_count(), "fetched RPKI VRPs");
+    let mut aspas = Vec::with_capacity(resp.aspas.len());
+    for aspa in &resp.aspas {
+        let providers = aspa
+            .providers
+            .iter()
+            .map(|p| parse_asn(p))
+            .collect::<Result<_>>()?;
+        aspas.push((parse_asn(&aspa.customer)?, providers));
+    }
+
+    let store = RpkiStore::from_vrps(vrps).with_aspas(aspas);
+    info!(
+        vrps = store.vrp_count(),
+        aspas = store.aspa_count(),
+        "fetched RPKI VRPs"
+    );
     Ok(store)
 }
 

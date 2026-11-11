@@ -60,7 +60,8 @@ families = ["ipv4-unicast", "ipv6-unicast"]
 
 # RPKI validation (optional)
 # Fetch Validated ROA Payloads from a Routinator-compatible RPKI validator
-# and annotate routes with their RPKI status (valid/invalid/not-found).
+# and annotate routes with their RPKI status.
+# When the validator also sends ASPAs routes also get an ASPA status.
 # [rpki]
 # enabled = true
 # url = "https://rpki.example.com"    # Routinator base URL (fetches /json)
