@@ -169,7 +169,9 @@ fn process_update(
     let communities = extract_communities(update);
     let ext_communities = extract_ext_communities(update);
     let large_communities = extract_large_communities(update);
-    let origin_as = BgpRoute::derive_origin_as(&as_path);
+    // An empty AS path is legal only on an iBGP session: the AS of the
+    // peer, which is also the local AS, originates the route.
+    let origin_as = BgpRoute::derive_origin_as(&as_path).or(Some(params.as_num));
     let now = Utc::now();
 
     // Process IPv4 withdrawals (standard WITHDRAWN ROUTES field is always IPv4)
@@ -847,6 +849,19 @@ mod tests {
             );
             assert_eq!(routes[0].as_path_flat(), vec![65001]);
         }
+    }
+
+    #[test]
+    fn empty_as_path_has_local_as_as_origin() {
+        let peer = TestPeer::new();
+        let body = UpdateBody::new()
+            .next_hop(&[172, 30, 42, 20])
+            .nlri(&[24, 198, 51, 100])
+            .build();
+        peer.receive(&body).unwrap();
+        let routes = peer.routes("198.51.100.0/24");
+        assert!(routes[0].as_path.is_empty());
+        assert_eq!(routes[0].origin_as, Some(peer.params.as_num));
     }
 
     #[test]

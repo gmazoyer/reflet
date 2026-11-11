@@ -9,6 +9,13 @@ All notable changes to Reflet will be documented in this file.
   `not_found`, when no VRP covers the route. An API client that reads
   `not_found` must change.
 
+### Origin AS of routes with an empty AS path
+- A route with an empty AS path now has the local AS as its origin AS. On
+  an iBGP session, this is the AS of the peer. Such a route gets an RPKI
+  status of valid or invalid when a VRP covers it. Before, the status was
+  always `unknown`. The `origin_as` field in the API and in the events is
+  the local AS, where it was `null`.
+
 ### RPKI fetch
 - When Reflet has no VRPs, for example because the validator was not ready
   when Reflet started, it tries the fetch again every 30 seconds. Before,

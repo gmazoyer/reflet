@@ -68,7 +68,8 @@ pub struct BgpRoute {
     pub communities: Vec<Community>,
     pub ext_communities: Vec<ExtCommunity>,
     pub large_communities: Vec<LargeCommunity>,
-    /// Origin AS derived from the last ASN in the AS path.
+    /// Origin AS derived from the last ASN in the AS path. For an empty AS
+    /// path (a route that the AS of an iBGP peer originates), the local AS.
     pub origin_as: Option<u32>,
     pub received_at: DateTime<Utc>,
     /// Whether this route is marked as stale during Enhanced Route Refresh (RFC 7313).
