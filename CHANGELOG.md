@@ -9,6 +9,11 @@ All notable changes to Reflet will be documented in this file.
   `not_found`, when no VRP covers the route. An API client that reads
   `not_found` must change.
 
+### RPKI fetch
+- When Reflet has no VRPs, for example because the validator was not ready
+  when Reflet started, it tries the fetch again every 30 seconds. Before,
+  it waited for a full `refresh_interval`.
+
 ### ASPA verification
 - When the RPKI validator sends ASPAs (Routinator 0.16 does by default),
   Reflet shows the ASPA verification status of the AS path of each route

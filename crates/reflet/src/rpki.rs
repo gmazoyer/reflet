@@ -80,6 +80,9 @@ pub async fn fetch(url: &str) -> Result<RpkiStore> {
     Ok(store)
 }
 
+/// Delay before the next fetch while the store is empty.
+const EMPTY_STORE_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Spawn a background task that periodically refreshes the RPKI store.
 pub fn spawn_refresh_task(
     url: String,
@@ -89,7 +92,16 @@ pub fn spawn_refresh_task(
     tokio::spawn(async move {
         let interval = std::time::Duration::from_secs(interval_secs);
         loop {
-            tokio::time::sleep(interval).await;
+            // An empty store means that no fetch succeeded yet, for example
+            // because the validator was not ready at startup. Try again
+            // sooner, so that routes do not stay without a status.
+            let empty = store.read().is_ok_and(|s| s.is_empty());
+            let delay = if empty {
+                interval.min(EMPTY_STORE_RETRY)
+            } else {
+                interval
+            };
+            tokio::time::sleep(delay).await;
             match fetch(&url).await {
                 Ok(new_store) => {
                     info!(vrps = new_store.vrp_count(), "refreshed RPKI VRPs");
