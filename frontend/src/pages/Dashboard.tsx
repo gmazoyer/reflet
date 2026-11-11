@@ -45,6 +45,12 @@ export default function Dashboard() {
               value={summary.rpki.vrp_count.toLocaleString()}
             />
           )}
+          {summary.rpki && summary.rpki.aspa_count > 0 && (
+            <StatCard
+              label="RPKI ASPAs"
+              value={summary.rpki.aspa_count.toLocaleString()}
+            />
+          )}
         </div>
       )}
 

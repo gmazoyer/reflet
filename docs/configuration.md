@@ -106,7 +106,9 @@ families = ["ipv4-unicast"]  # IPv4 only
 
 ## `[rpki]`
 
-RPKI validation (RFC 6811). Fetches Validated ROA Payloads from a [Routinator](https://routinator.docs.nlnetlabs.nl/)-compatible RPKI validator and annotates routes with their validation status (valid, invalid, or not-found). Validation is applied at API serve-time — statuses are never stored in the RIB.
+RPKI validation (RFC 6811). Fetches Validated ROA Payloads from a [Routinator](https://routinator.docs.nlnetlabs.nl/)-compatible RPKI validator and annotates routes with their validation status (valid, invalid, or unknown). Validation is applied at API serve-time — statuses are never stored in the RIB.
+
+When the validator also sends ASPAs in its `/json` output (Routinator 0.16 does by default), Reflet also annotates each route with the ASPA verification status of its AS path (valid, invalid, or unknown). It uses the downstream algorithm of draft-ietf-sidrops-aspa-verification, which accepts one up-ramp followed by one down-ramp. There is no separate option for ASPA.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|

@@ -213,11 +213,14 @@ impl AppState {
         }
     }
 
-    /// Annotate a route with its RPKI validation status.
+    /// Annotate a route with its RPKI and ASPA validation statuses.
     pub fn annotate_route(&self, mut route: BgpRoute) -> BgpRoute {
         let rpki_store = self.rpki_store.read().unwrap();
         if !rpki_store.is_empty() {
             route.rpki_status = Some(rpki_store.validate(&route.prefix, route.origin_as));
+        }
+        if rpki_store.aspa_count() > 0 {
+            route.aspa_status = Some(rpki_store.validate_aspa(&route.as_path));
         }
         route
     }

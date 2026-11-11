@@ -67,6 +67,7 @@ export default function Lookup() {
         );
         const showPathId = rows.some((r) => r.route.path_id != null);
         const showRpki = rows.some((r) => r.route.rpki_status != null);
+        const showAspa = rows.some((r) => r.route.aspa_status != null);
         const totalRoutes = data.results.reduce((sum, r) => sum + r.routes.length, 0);
 
         return (
@@ -119,6 +120,11 @@ export default function Lookup() {
                           RPKI
                         </th>
                       )}
+                      {showAspa && (
+                        <th scope="col" className="px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                          ASPA
+                        </th>
+                      )}
                       <th scope="col" className="px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                         Next Hop
                       </th>
@@ -159,6 +165,11 @@ export default function Lookup() {
                         {showRpki && (
                           <td className="px-4 py-3">
                             <RpkiBadge status={row.route.rpki_status} />
+                          </td>
+                        )}
+                        {showAspa && (
+                          <td className="px-4 py-3">
+                            <RpkiBadge status={row.route.aspa_status} />
                           </td>
                         )}
                         <td className="px-4 py-3">

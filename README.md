@@ -8,7 +8,7 @@ A BGP Looking Glass built with Rust and React. Reflet connects to your BGP route
 
 Reflet speaks BGP natively. It peers with your routers using a full RFC 4271 state machine with support for Add-Path (RFC 7911), Route Refresh (RFC 2918 + RFC 7313), Graceful Restart (RFC 4724), and IPv4 routes with IPv6 next hops (RFC 8950), then stores every route it receives in memory for fast lookups.
 
-Routes can be searched by prefix (exact, longest-prefix-match, or more-specifics across all peers), filtered by ASN, AS path regex, community values with wildcards, origin, MED, or local-pref with comparison operators. Lookup results include an interactive AS path DAG visualization. If you run an RPKI validator like Routinator, Reflet annotates every route with its ROA validation status (valid, invalid, or not-found).
+Routes can be searched by prefix (exact, longest-prefix-match, or more-specifics across all peers), filtered by ASN, AS path regex, community values with wildcards, origin, MED, or local-pref with comparison operators. Lookup results include an interactive AS path DAG visualization. If you run an RPKI validator like Routinator, Reflet annotates every route with its ROA validation status (valid, invalid, or unknown), and with the ASPA verification status of its AS path when the validator sends ASPAs.
 
 The web frontend streams route changes in real time over Server-Sent Events, so the view stays current without polling. Communities are shown with human-readable names if you provide definition files, and AS numbers are enriched with names and countries from [IPInfo Lite](https://ipinfo.io/lite) datasets.
 

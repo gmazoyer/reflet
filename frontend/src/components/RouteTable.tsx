@@ -16,7 +16,7 @@ import Tooltip from "./Tooltip";
 
 const columnHelper = createColumnHelper<BgpRoute>();
 
-function buildColumns(communityDefinitions?: CommunityDefinitions, asnInfo?: AsnMap, showPathId?: boolean, showRpki?: boolean, onFilterByCommunity?: (filter: string) => void) {
+function buildColumns(communityDefinitions?: CommunityDefinitions, asnInfo?: AsnMap, showPathId?: boolean, showRpki?: boolean, showAspa?: boolean, onFilterByCommunity?: (filter: string) => void) {
   return [
     columnHelper.accessor("prefix", {
       header: "Prefix",
@@ -40,6 +40,14 @@ function buildColumns(communityDefinitions?: CommunityDefinitions, asnInfo?: Asn
       ? [
           columnHelper.accessor("rpki_status", {
             header: "RPKI",
+            cell: (info) => <RpkiBadge status={info.getValue()} />,
+          }),
+        ]
+      : []),
+    ...(showAspa
+      ? [
+          columnHelper.accessor("aspa_status", {
+            header: "ASPA",
             cell: (info) => <RpkiBadge status={info.getValue()} />,
           }),
         ]
@@ -128,7 +136,8 @@ export default function RouteTable({ data, communityDefinitions, asnInfo, onFilt
   const parentRef = useRef<HTMLDivElement>(null);
   const showPathId = useMemo(() => data.some((r) => r.path_id != null), [data]);
   const showRpki = useMemo(() => data.some((r) => r.rpki_status != null), [data]);
-  const columns = useMemo(() => buildColumns(communityDefinitions, asnInfo, showPathId, showRpki, onFilterByCommunity), [communityDefinitions, asnInfo, showPathId, showRpki, onFilterByCommunity]);
+  const showAspa = useMemo(() => data.some((r) => r.aspa_status != null), [data]);
+  const columns = useMemo(() => buildColumns(communityDefinitions, asnInfo, showPathId, showRpki, showAspa, onFilterByCommunity), [communityDefinitions, asnInfo, showPathId, showRpki, showAspa, onFilterByCommunity]);
 
   const table = useReactTable({
     data,

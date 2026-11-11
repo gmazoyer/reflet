@@ -78,6 +78,9 @@ pub struct BgpRoute {
     /// RPKI validation status, set at API serve-time (not stored in RIB).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpki_status: Option<RpkiStatus>,
+    /// ASPA verification status, set at API serve-time (not stored in RIB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspa_status: Option<RpkiStatus>,
 }
 
 impl BgpRoute {
@@ -256,6 +259,7 @@ mod tests {
             received_at: Utc::now(),
             stale: false,
             rpki_status: None,
+            aspa_status: None,
         };
         // Sequence(2) + Set(counts as 1) = 3
         assert_eq!(route.as_path_length(), 3);

@@ -2,6 +2,20 @@
 
 All notable changes to Reflet will be documented in this file.
 
+## Unreleased
+
+### Changes that can need an action after the upgrade
+- The `rpki_status` field of a route in the API is `unknown`, not
+  `not_found`, when no VRP covers the route. An API client that reads
+  `not_found` must change.
+
+### ASPA verification
+- When the RPKI validator sends ASPAs (Routinator 0.16 does by default),
+  Reflet shows the ASPA verification status of the AS path of each route
+  (valid, invalid or unknown), in the web UI and as `aspa_status` in the
+  API. The summary shows the number of ASPAs as `rpki.aspa_count`. This
+  needs no new configuration.
+
 ## 0.2.0 - 2026-10-20
 
 Reflet can keep periodic snapshots of the RIB of a peer. BGP sessions no
